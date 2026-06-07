@@ -11,7 +11,8 @@ module DiscourseImageProcessing
       "webp" => "webp",
       "heic" => "heic",
       "heif" => "heic",
-      "avif" => "heic"
+      "avif" => "heic",
+      "ico" => "ico"
     }.freeze
 
     def thumbnail(input:, output:, width:, height:, format:, quality:, timeout: Runner::DEFAULT_TIMEOUT)
@@ -79,6 +80,14 @@ module DiscourseImageProcessing
       argv.concat(["-quality", Integer(quality).to_s]) if quality
       argv << output
       run_image_command(argv, output, ext, "jpg", timeout)
+    end
+
+    def convert_ico_to_png(input:, output:, timeout: Runner::DEFAULT_TIMEOUT)
+      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("magick")
+      input = PathSafety.ensure_imagemagick_safe!(input)
+      output = PathSafety.ensure_imagemagick_safe!(output)
+      argv = ["magick", "ico:#{input}[-1]", "-auto-orient", "-background", "transparent", output]
+      run_image_command(argv, output, "ico", "png", timeout)
     end
 
     def fix_orientation(input:, output: input, timeout: Runner::DEFAULT_TIMEOUT)

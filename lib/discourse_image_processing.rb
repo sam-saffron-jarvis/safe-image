@@ -15,6 +15,7 @@ require_relative "discourse_image_processing/result"
 require_relative "discourse_image_processing/runner"
 require_relative "discourse_image_processing/path_safety"
 require_relative "discourse_image_processing/optimizer"
+require_relative "discourse_image_processing/svg_sanitizer"
 require_relative "discourse_image_processing/image_magick_backend"
 require_relative "discourse_image_processing/processor"
 require_relative "discourse_image_processing/discourse_compat"
@@ -48,5 +49,7 @@ module DiscourseImageProcessing
   def downsize(...) = DiscourseCompat.downsize(...)
   def convert_to_jpeg(...) = DiscourseCompat.convert_to_jpeg(...)
   def fix_orientation(...) = DiscourseCompat.fix_orientation(...)
+  def convert_favicon_to_png(...) = DiscourseCompat.convert_favicon_to_png(...)
   def optimize_image!(...) = DiscourseCompat.optimize_image!(...)
+  def sanitize_svg!(...) = SvgSanitizer.sanitize!(...)
 end

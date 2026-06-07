@@ -27,7 +27,11 @@ Implemented:
   - `downsize`
   - `convert_to_jpeg`
   - `fix_orientation`
+  - `convert_favicon_to_png`
   - `optimize_image!`
+  - `sanitize_svg!`
+- SVG sanitisation via stdlib REXML allowlist
+- ICO largest-frame extraction via explicit ImageMagick compatibility backend
 - libvips `VIPS_BLOCK_UNTRUSTED` equivalent enabled in-process
 - ImageMagick/Magick loaders blocked by libvips operation class
 - libvips cache disabled by default in-process
@@ -36,8 +40,6 @@ Implemented:
 Not implemented yet:
 
 - subprocess/Landlock execution mode
-- SVG sanitisation
-- ICO frame extraction
 - native-vips implementation of ImageMagick's full resize mini-language (`50%`, `100x100>`, `4000000@`)
 - full golden-image parity suite against Discourse fixtures
 
@@ -93,8 +95,10 @@ DiscourseImageProcessing.crop("in.jpg", "avatar.jpg", 240, 240, backend: :imagem
 DiscourseImageProcessing.downsize("in.png", "smaller.png", "50%")
 DiscourseImageProcessing.convert_to_jpeg("in.png", "out.jpg", quality: 85)
 DiscourseImageProcessing.fix_orientation("in.jpg")
+DiscourseImageProcessing.convert_favicon_to_png("favicon.ico", "favicon.png")
 DiscourseImageProcessing.optimize_image!("out.jpg")
 DiscourseImageProcessing.optimize_image!("out.png", allow_lossy_png: true)
+DiscourseImageProcessing.sanitize_svg!("icon.svg")
 ```
 
 ## License

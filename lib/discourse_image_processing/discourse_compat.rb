@@ -72,6 +72,13 @@ module DiscourseImageProcessing
       result_from_info(probe.input, output, info, "imagemagick")
     end
 
+    def convert_favicon_to_png(from, to, optimize: true)
+      output = Pathname.new(to).expand_path.to_s
+      info = ImageMagickBackend.convert_ico_to_png(input: Pathname.new(from).expand_path.to_s, output: output)
+      Optimizer.optimize(output, mode: :lossless, strip_metadata: true) if optimize
+      result_from_info(from, output, info, "imagemagick")
+    end
+
     def optimize_image!(path, allow_lossy_png: false, strip_metadata: true, quality: nil)
       Optimizer.optimize(
         path,

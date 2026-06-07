@@ -15,6 +15,8 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/discourse_image_processing_native/extconf.rb"]
 
+  spec.add_runtime_dependency "rexml", "~> 3.4"
+
   spec.metadata = {
     "source_code_uri" => spec.homepage,
     "homepage_uri" => spec.homepage,
