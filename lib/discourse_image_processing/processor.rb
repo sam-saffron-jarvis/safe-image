@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "fileutils"
+require "pathname"
+
 module DiscourseImageProcessing
   class Processor
     SUPPORTED_INPUTS = %w[jpg jpeg png webp heic heif avif].freeze
@@ -59,7 +62,7 @@ module DiscourseImageProcessing
     private
 
     def safe_existing_file!(path)
-      path = Pathname(path).expand_path
+      path = Pathname.new(path).expand_path
       raise UnsafePathError, "path contains NUL" if path.to_s.include?("\0")
       raise UnsafePathError, "not a file: #{path}" unless path.file?
       ext = path.extname.delete_prefix(".").downcase
@@ -69,7 +72,7 @@ module DiscourseImageProcessing
     end
 
     def safe_output_path!(path)
-      path = Pathname(path).expand_path
+      path = Pathname.new(path).expand_path
       raise UnsafePathError, "path contains NUL" if path.to_s.include?("\0")
       path
     end

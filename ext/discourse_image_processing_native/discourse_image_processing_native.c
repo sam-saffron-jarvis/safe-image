@@ -98,7 +98,7 @@ static void validate_pixels_or_raise(VipsImage *image, VALUE max_pixels_val) {
   if (NIL_P(max_pixels_val)) return;
   long long max_pixels = NUM2LL(max_pixels_val);
   if (max_pixels <= 0) return;
-  long long pixels = (long long)VIPS_IMAGE_WIDTH(image) * (long long)VIPS_IMAGE_HEIGHT(image);
+  long long pixels = (long long)image->Xsize * (long long)image->Ysize;
   if (pixels > max_pixels) {
     rb_raise(eLimit, "image has %lld pixels, exceeds %lld", pixels, max_pixels);
   }
@@ -139,8 +139,8 @@ static VALUE rb_probe(VALUE self, VALUE path_val) {
 
   VALUE hash = rb_hash_new();
   rb_hash_aset(hash, ID2SYM(rb_intern("format")), rb_str_new_cstr(fmt));
-  rb_hash_aset(hash, ID2SYM(rb_intern("width")), INT2NUM(VIPS_IMAGE_WIDTH(image)));
-  rb_hash_aset(hash, ID2SYM(rb_intern("height")), INT2NUM(VIPS_IMAGE_HEIGHT(image)));
+  rb_hash_aset(hash, ID2SYM(rb_intern("width")), INT2NUM(image->Xsize));
+  rb_hash_aset(hash, ID2SYM(rb_intern("height")), INT2NUM(image->Ysize));
   rb_hash_aset(hash, ID2SYM(rb_intern("duration_ms")), DBL2NUM(now_ms() - start));
   g_object_unref(image);
   return hash;
@@ -189,8 +189,8 @@ static VALUE rb_thumbnail(VALUE self, VALUE input_val, VALUE output_val, VALUE w
   VALUE hash = rb_hash_new();
   rb_hash_aset(hash, ID2SYM(rb_intern("input_format")), rb_str_new_cstr(input_fmt));
   rb_hash_aset(hash, ID2SYM(rb_intern("output_format")), rb_str_new_cstr(out_fmt));
-  rb_hash_aset(hash, ID2SYM(rb_intern("width")), INT2NUM(VIPS_IMAGE_WIDTH(thumb)));
-  rb_hash_aset(hash, ID2SYM(rb_intern("height")), INT2NUM(VIPS_IMAGE_HEIGHT(thumb)));
+  rb_hash_aset(hash, ID2SYM(rb_intern("width")), INT2NUM(thumb->Xsize));
+  rb_hash_aset(hash, ID2SYM(rb_intern("height")), INT2NUM(thumb->Ysize));
   rb_hash_aset(hash, ID2SYM(rb_intern("duration_ms")), DBL2NUM(now_ms() - start));
 
   g_object_unref(thumb);

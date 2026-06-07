@@ -1,9 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "discourse_image_processing/version"
-require_relative "discourse_image_processing/native"
-require_relative "discourse_image_processing/result"
-require_relative "discourse_image_processing/processor"
 
 module DiscourseImageProcessing
   class Error < StandardError; end
@@ -11,7 +8,13 @@ module DiscourseImageProcessing
   class UnsafePathError < Error; end
   class InvalidImageError < Error; end
   class LimitError < Error; end
+end
 
+require_relative "discourse_image_processing/native"
+require_relative "discourse_image_processing/result"
+require_relative "discourse_image_processing/processor"
+
+module DiscourseImageProcessing
   module_function
 
   def probe(path, max_pixels: nil)

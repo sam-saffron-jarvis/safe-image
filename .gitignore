@@ -1,0 +1,10 @@
+/Makefile
+/mkmf.log
+/*.gem
+/*.o
+/*.so
+/ext/**/Makefile
+/ext/**/*.o
+/ext/**/*.so
+/tmp/
+/pkg/
