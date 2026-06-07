@@ -39,9 +39,8 @@ Implemented:
 
 Not implemented yet:
 
-- subprocess/Landlock execution mode
-- native-vips implementation of ImageMagick's full resize mini-language (`50%`, `100x100>`, `4000000@`)
-- full golden-image parity suite against Discourse fixtures
+- Landlock sandboxing for every compatibility helper; thumbnail supports worker sandbox now, shell-based compatibility helpers still use bounded argv execution unless routed through a sandboxed worker path
+- native-vips north/top crop parity for Discourse avatar crop; ImageMagick remains the exact compatibility backend for that path
 
 ## Why this exists
 
@@ -63,6 +62,18 @@ ImageMagick pseudo-filename option parsing surprises.
 ## Install
 
 System dependency: `libvips` headers and library.
+
+Optional command dependencies for compatibility/optimisation paths:
+
+- `magick` for ImageMagick compatibility operations
+- `jpegoptim` for JPEG optimisation
+- `oxipng` for PNG lossless optimisation
+- `pngquant` for optional lossy PNG optimisation
+
+Ruby runtime dependencies:
+
+- `rexml` for SVG sanitising
+- `landlock` for optional Linux subprocess sandboxing
 
 ```bash
 gem build discourse_image_processing.gemspec
@@ -99,6 +110,16 @@ DiscourseImageProcessing.convert_favicon_to_png("favicon.ico", "favicon.png")
 DiscourseImageProcessing.optimize_image!("out.jpg")
 DiscourseImageProcessing.optimize_image!("out.png", allow_lossy_png: true)
 DiscourseImageProcessing.sanitize_svg!("icon.svg")
+
+# Run a thumbnail operation in a subprocess with Landlock/SafeExec when available.
+DiscourseImageProcessing.thumbnail(
+  input: "input.jpg",
+  output: "thumb.jpg",
+  width: 600,
+  height: 400,
+  execution: :sandbox
+)
+DiscourseImageProcessing.sandbox_available?
 ```
 
 ## License

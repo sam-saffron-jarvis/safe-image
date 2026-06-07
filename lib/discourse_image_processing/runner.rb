@@ -26,9 +26,13 @@ module DiscourseImageProcessing
       "VIPS_BLOCK_UNTRUSTED" => "1"
     }.freeze
 
-    def run!(argv, timeout: DEFAULT_TIMEOUT, env: {})
+    def run!(argv, timeout: DEFAULT_TIMEOUT, env: {}, sandbox: false, read: [], write: [])
       raise ArgumentError, "empty command" if argv.nil? || argv.empty?
       argv = argv.map(&:to_s)
+
+      if sandbox
+        return Sandbox.capture_command!(argv, read: read, write: write, timeout: timeout, env: SAFE_ENV.merge(env))
+      end
 
       stdout = stderr = status = nil
       begin

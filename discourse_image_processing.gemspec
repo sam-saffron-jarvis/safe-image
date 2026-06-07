@@ -4,7 +4,7 @@ Gem::Specification.new do |spec|
   spec.name = "discourse_image_processing"
   spec.version = File.read(File.expand_path("lib/discourse_image_processing/version.rb", __dir__)).match(/VERSION = "([^"]+)"/)[1]
   spec.summary = "Small, secure image processing boundary for Discourse"
-  spec.description = "A minimal libvips-backed image processing gem for untrusted uploads. No ruby-vips dependency; calls libvips from a tiny native extension."
+  spec.description = "A libvips/ImageMagick-compatible image processing boundary for Discourse uploads, with optimisation and optional Landlock sandbox execution."
   spec.homepage = "https://github.com/sam-saffron-jarvis/discourse-image-processing"
   spec.license = "MIT"
   spec.authors = ["Sam Saffron", "Jarvis"]
@@ -16,6 +16,7 @@ Gem::Specification.new do |spec|
   spec.extensions = ["ext/discourse_image_processing_native/extconf.rb"]
 
   spec.add_runtime_dependency "rexml", "~> 3.4"
+  spec.add_runtime_dependency "landlock", "~> 0.2"
 
   spec.metadata = {
     "source_code_uri" => spec.homepage,

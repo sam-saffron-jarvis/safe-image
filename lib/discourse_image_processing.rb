@@ -13,10 +13,12 @@ end
 require_relative "discourse_image_processing/native"
 require_relative "discourse_image_processing/result"
 require_relative "discourse_image_processing/runner"
+require_relative "discourse_image_processing/sandbox"
 require_relative "discourse_image_processing/path_safety"
 require_relative "discourse_image_processing/optimizer"
 require_relative "discourse_image_processing/svg_sanitizer"
 require_relative "discourse_image_processing/image_magick_backend"
+require_relative "discourse_image_processing/vips_backend"
 require_relative "discourse_image_processing/processor"
 require_relative "discourse_image_processing/discourse_compat"
 
@@ -27,8 +29,8 @@ module DiscourseImageProcessing
     Processor.new(max_pixels: max_pixels).probe(path)
   end
 
-  def thumbnail(input:, output:, width:, height:, format: nil, quality: 85, max_pixels: nil, backend: :vips, optimize: false, optimize_mode: :lossless)
-    Processor.new(max_pixels: max_pixels, backend: backend).thumbnail(
+  def thumbnail(input:, output:, width:, height:, format: nil, quality: 85, max_pixels: nil, backend: :vips, optimize: false, optimize_mode: :lossless, execution: :inline)
+    Processor.new(max_pixels: max_pixels, backend: backend, execution: execution).thumbnail(
       input: input,
       output: output,
       width: width,
@@ -52,4 +54,5 @@ module DiscourseImageProcessing
   def convert_favicon_to_png(...) = DiscourseCompat.convert_favicon_to_png(...)
   def optimize_image!(...) = DiscourseCompat.optimize_image!(...)
   def sanitize_svg!(...) = SvgSanitizer.sanitize!(...)
+  def sandbox_available? = Sandbox.available?
 end

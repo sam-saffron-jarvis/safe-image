@@ -8,9 +8,10 @@ module DiscourseImageProcessing
     SUPPORTED_INPUTS = %w[jpg jpeg png webp heic heif avif].freeze
     SUPPORTED_OUTPUTS = %w[jpg jpeg png webp avif].freeze
 
-    def initialize(max_pixels: nil, backend: :vips)
+    def initialize(max_pixels: nil, backend: :vips, execution: :inline)
       @max_pixels = max_pixels
       @backend = backend.to_sym
+      @execution = execution.to_sym
     end
 
     def probe(path)
@@ -44,6 +45,35 @@ module DiscourseImageProcessing
       out_format = "jpg" if out_format == "jpeg"
       unless SUPPORTED_OUTPUTS.include?(out_format)
         raise UnsupportedFormatError, "unsupported output format: #{out_format.inspect}"
+      end
+
+      if @execution == :sandbox
+        info = Sandbox.thumbnail(
+          input: input.to_s,
+          output: output.to_s,
+          width: width,
+          height: height,
+          format: out_format,
+          quality: quality,
+          max_pixels: @max_pixels,
+          backend: @backend,
+          optimize: optimize,
+          optimize_mode: optimize_mode
+        )
+        if info
+          return Result.new(
+            input: input.to_s,
+            output: output.to_s,
+            input_format: info.fetch(:input_format),
+            output_format: info.fetch(:output_format),
+            width: info.fetch(:width),
+            height: info.fetch(:height),
+            filesize: File.size(output),
+            backend: "sandboxed-#{info.fetch(:backend)}",
+            duration_ms: info.fetch(:duration_ms),
+            optimizer: info[:optimizer]
+          )
+        end
       end
 
       output.dirname.mkpath

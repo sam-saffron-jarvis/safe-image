@@ -208,6 +208,54 @@ static VALUE rb_thumbnail(VALUE self, VALUE input_val, VALUE output_val, VALUE w
   return hash;
 }
 
+static VALUE rb_resize(VALUE self, VALUE input_val, VALUE output_val, VALUE scale_val, VALUE format_val, VALUE quality_val, VALUE max_pixels_val) {
+  Check_Type(input_val, T_STRING);
+  Check_Type(output_val, T_STRING);
+  Check_Type(format_val, T_STRING);
+  double scale = NUM2DBL(scale_val);
+  int quality = NUM2INT(quality_val);
+  if (scale <= 0.0) rb_raise(rb_eArgError, "scale must be positive");
+  const char *out_fmt = normalized_format(StringValueCStr(format_val));
+  if (!out_fmt || strcmp(out_fmt, "heic") == 0) rb_raise(eUnsupported, "unsupported output format");
+
+  double start = now_ms();
+  const char *input_fmt = NULL;
+  VipsImage *in = load_explicit(StringValueCStr(input_val), &input_fmt);
+  validate_pixels_or_raise(in, max_pixels_val);
+
+  VipsImage *rot = NULL;
+  if (vips_autorot(in, &rot, NULL) != 0) {
+    g_object_unref(in);
+    raise_vips();
+  }
+
+  VipsImage *out = NULL;
+  if (vips_resize(rot, &out, scale, NULL) != 0) {
+    g_object_unref(rot);
+    g_object_unref(in);
+    raise_vips();
+  }
+
+  if (save_explicit(out, StringValueCStr(output_val), out_fmt, quality) != 0) {
+    g_object_unref(out);
+    g_object_unref(rot);
+    g_object_unref(in);
+    raise_vips();
+  }
+
+  VALUE hash = rb_hash_new();
+  rb_hash_aset(hash, ID2SYM(rb_intern("input_format")), rb_str_new_cstr(input_fmt));
+  rb_hash_aset(hash, ID2SYM(rb_intern("output_format")), rb_str_new_cstr(out_fmt));
+  rb_hash_aset(hash, ID2SYM(rb_intern("width")), INT2NUM(out->Xsize));
+  rb_hash_aset(hash, ID2SYM(rb_intern("height")), INT2NUM(out->Ysize));
+  rb_hash_aset(hash, ID2SYM(rb_intern("duration_ms")), DBL2NUM(now_ms() - start));
+
+  g_object_unref(out);
+  g_object_unref(rot);
+  g_object_unref(in);
+  return hash;
+}
+
 void Init_discourse_image_processing_native(void) {
   mDIP = rb_define_module("DiscourseImageProcessing");
   eError = rb_const_get(mDIP, rb_intern("Error"));
@@ -217,4 +265,5 @@ void Init_discourse_image_processing_native(void) {
   mNative = rb_define_module_under(mDIP, "Native");
   rb_define_singleton_method(mNative, "probe", rb_probe, 1);
   rb_define_singleton_method(mNative, "thumbnail", rb_thumbnail, 7);
+  rb_define_singleton_method(mNative, "resize", rb_resize, 6);
 }

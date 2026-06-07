@@ -41,20 +41,30 @@ module DiscourseImageProcessing
       result_from_info(probe.input, to, info, "imagemagick")
     end
 
-    def downsize(from, to, dimensions, backend: :imagemagick, optimize: true, max_pixels: nil)
-      # ImageMagick remains the exact compatibility backend for dimensions like
-      # "50%", "100x100>" and "4000000@". A native vips equivalent should parse
-      # and implement this mini-language before becoming default.
+    def downsize(from, to, dimensions, backend: :imagemagick, optimize: true, max_pixels: nil, quality: 85)
       probe = DiscourseImageProcessing.probe(from, max_pixels: max_pixels)
       output = Pathname.new(to).expand_path.to_s
-      info = ImageMagickBackend.downsize(
-        input: probe.input,
-        output: output,
-        dimensions: dimensions,
-        format: File.extname(output).delete_prefix(".").downcase
-      )
+      format = File.extname(output).delete_prefix(".").downcase
+      info =
+        if backend.to_sym == :vips
+          VipsBackend.downsize(
+            input: probe.input,
+            output: output,
+            dimensions: dimensions,
+            format: format,
+            quality: quality,
+            max_pixels: max_pixels
+          )
+        else
+          ImageMagickBackend.downsize(
+            input: probe.input,
+            output: output,
+            dimensions: dimensions,
+            format: format
+          )
+        end
       Optimizer.optimize(output, mode: :lossless, strip_metadata: true) if optimize
-      result_from_info(probe.input, output, info, "imagemagick")
+      result_from_info(probe.input, output, info, backend.to_sym == :vips ? "libvips-direct" : "imagemagick")
     end
 
     def convert_to_jpeg(from, to, quality: nil, optimize: true, max_pixels: nil)
