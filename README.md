@@ -16,6 +16,8 @@ Implemented:
 - explicit savers for JPEG, PNG, WebP and AVIF
 - metadata stripping on save
 - max-pixel guard
+- libvips `VIPS_BLOCK_UNTRUSTED` equivalent enabled in-process
+- ImageMagick/Magick loaders blocked by libvips operation class
 - libvips cache disabled by default in-process
 - no ImageMagick, no shell-outs, no delegates
 
@@ -36,6 +38,8 @@ to become the single choke point for image decode/transform/optimise/validate.
 
 ImageMagick delegates are deliberately avoided. Loading is by explicit libvips
 loader selected from an allowlisted extension, not generic sniffing/fallback.
+At initialisation the native extension enables libvips' untrusted-operation
+block and blocks known Magick loader classes (`VipsForeignLoadMagick*`).
 
 ## Install
 

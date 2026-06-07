@@ -51,6 +51,15 @@ static void init_vips_once(void) {
   if (initialized) return;
   if (VIPS_INIT("discourse_image_processing") != 0) raise_vips();
 
+  /* Avoid libvips operations that are explicitly tagged as unsafe for
+   * untrusted input. Also block ImageMagick-backed loaders by class name;
+   * this gem uses explicit native libvips loaders and should never fall back
+   * to ImageMagick delegates. */
+  vips_block_untrusted_set(TRUE);
+  vips_operation_block_set("VipsForeignLoadMagick", TRUE);
+  vips_operation_block_set("VipsForeignLoadMagick6", TRUE);
+  vips_operation_block_set("VipsForeignLoadMagick7", TRUE);
+
   /* Keep the embedded path predictable and bounded. Callers that want harder
    * isolation should run this gem inside a sandboxed worker process. */
   vips_concurrency_set(1);
