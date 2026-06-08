@@ -46,7 +46,7 @@ System dependency:
 
 Optional command dependencies:
 
-- `magick` / `identify` for ImageMagick compatibility operations
+- `magick` / `convert` and `identify` for ImageMagick compatibility operations
 - `jpegoptim` for JPEG optimisation
 - `oxipng` for PNG lossless optimisation
 - `pngquant` for optional lossy PNG optimisation

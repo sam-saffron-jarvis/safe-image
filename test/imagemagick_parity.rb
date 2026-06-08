@@ -15,11 +15,13 @@ def assert_pixel_equal!(expected, actual, name)
   abort "#{name}: expected pixel parity, got AE #{metric}" unless metric == "0" || metric == "0 (0)"
 end
 
+CONVERT = SafeImage::ImageMagickBackend.convert_command
+
 Dir.mktmpdir do |dir|
   expected = File.join(dir, "disc-resize.jpg")
   actual = File.join(dir, "gem-resize.jpg")
   system(
-    "magick", "jpeg:#{JPG}[0]", "-auto-orient", "-gravity", "center", "-background", "transparent",
+    CONVERT, "jpeg:#{JPG}[0]", "-auto-orient", "-gravity", "center", "-background", "transparent",
     "-thumbnail", "600x400^", "-extent", "600x400", "-interpolate", "catrom",
     "-unsharp", "2x0.5+0.7+0", "-interlace", "none", "-profile", PROFILE, expected,
     exception: true
@@ -30,7 +32,7 @@ Dir.mktmpdir do |dir|
   expected = File.join(dir, "disc-crop.jpg")
   actual = File.join(dir, "gem-crop.jpg")
   system(
-    "magick", "jpeg:#{JPG}[0]", "-auto-orient", "-gravity", "north", "-background", "transparent",
+    CONVERT, "jpeg:#{JPG}[0]", "-auto-orient", "-gravity", "north", "-background", "transparent",
     "-thumbnail", "400x400^", "-crop", "400x400+0+0", "-unsharp", "2x0.5+0.7+0",
     "-interlace", "none", "-profile", PROFILE, expected,
     exception: true
@@ -41,7 +43,7 @@ Dir.mktmpdir do |dir|
   expected = File.join(dir, "disc-down.png")
   actual = File.join(dir, "gem-down.png")
   system(
-    "magick", "png:#{PNG}[0]", "-auto-orient", "-gravity", "center", "-background", "transparent",
+    CONVERT, "png:#{PNG}[0]", "-auto-orient", "-gravity", "center", "-background", "transparent",
     "-interlace", "none", "-resize", "50%", "-profile", PROFILE, expected,
     exception: true
   )

@@ -7,8 +7,10 @@ Dir.mktmpdir do |dir|
   ps = File.join(dir, "ghostscript.ps")
   File.write(ps, "%!PS\n/Times-Roman findfont 12 scalefont setfont\n100 700 moveto (x) show\nshowpage\n")
 
+  command = SafeImage::ImageMagickBackend.convert_command
+
   begin
-    SafeImage::Runner.run!(["magick", ps, File.join(dir, "out.png")])
+    SafeImage::Runner.run!([command, ps, File.join(dir, "out.png")])
     abort "ImageMagick unexpectedly processed PostScript"
   rescue SafeImage::CommandError => e
     unless e.stderr.match?(/not authorized|security policy|no decode delegate/i)
@@ -20,7 +22,7 @@ Dir.mktmpdir do |dir|
   File.write(pdf, "%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n")
 
   begin
-    SafeImage::Runner.run!(["magick", pdf, File.join(dir, "out2.png")])
+    SafeImage::Runner.run!([command, pdf, File.join(dir, "out2.png")])
     abort "ImageMagick unexpectedly processed PDF"
   rescue SafeImage::CommandError => e
     unless e.stderr.match?(/not authorized|security policy|no decode delegate/i)
@@ -33,13 +35,13 @@ Dir.mktmpdir do |dir|
   fake_dir = File.join(dir, "fake-bin")
   Dir.mkdir(fake_dir)
   fake_marker = File.join(dir, "fake-ran")
-  fake_magick = File.join(fake_dir, "magick")
-  File.write(fake_magick, "#!/bin/sh\ntouch #{fake_marker}\nexit 0\n")
-  File.chmod(0o755, fake_magick)
+  fake_command = File.join(fake_dir, command)
+  File.write(fake_command, "#!/bin/sh\ntouch #{fake_marker}\nexit 0\n")
+  File.chmod(0o755, fake_command)
 
   begin
     SafeImage::Runner.run!(
-      ["magick", ps, File.join(dir, "out3.png")],
+      [command, ps, File.join(dir, "out3.png")],
       env: { "PATH" => fake_dir, "MAGICK_CONFIGURE_PATH" => "/tmp" }
     )
     abort "ImageMagick unexpectedly processed PostScript with env override"

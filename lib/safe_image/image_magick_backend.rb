@@ -18,7 +18,7 @@ module SafeImage
     }.freeze
 
     def probe(path, timeout: Runner::DEFAULT_TIMEOUT, max_pixels: nil)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("identify")
+      raise UnsupportedFormatError, "ImageMagick identify not available" unless Runner.available?("identify")
       path = PathSafety.ensure_imagemagick_safe!(path)
       ext = File.extname(path).delete_prefix(".").downcase
       decoder = DECODERS.fetch(ext) { raise UnsupportedFormatError, "unsupported ImageMagick input format: #{ext.inspect}" }
@@ -37,14 +37,14 @@ module SafeImage
     end
 
     def resize_like(input:, output:, width:, height:, format:, quality:, crop: false, timeout: Runner::DEFAULT_TIMEOUT)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("magick")
+      command = convert_command
 
       input = PathSafety.ensure_imagemagick_safe!(input)
       output = PathSafety.ensure_imagemagick_safe!(output)
       ext = File.extname(input).delete_prefix(".").downcase
       decoder = DECODERS.fetch(ext) { raise UnsupportedFormatError, "unsupported ImageMagick input format: #{ext.inspect}" }
 
-      argv = ["magick", "#{decoder}:#{input}[0]", "-auto-orient"]
+      argv = [command, "#{decoder}:#{input}[0]", "-auto-orient"]
       if crop == :north
         argv.concat([
           "-gravity", "north",
@@ -73,14 +73,14 @@ module SafeImage
     end
 
     def downsize(input:, output:, dimensions:, format:, timeout: Runner::DEFAULT_TIMEOUT)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("magick")
+      command = convert_command
 
       input = PathSafety.ensure_imagemagick_safe!(input)
       output = PathSafety.ensure_imagemagick_safe!(output)
       ext = File.extname(input).delete_prefix(".").downcase
       decoder = DECODERS.fetch(ext) { raise UnsupportedFormatError, "unsupported ImageMagick input format: #{ext.inspect}" }
       argv = [
-        "magick", "#{decoder}:#{input}[0]",
+        command, "#{decoder}:#{input}[0]",
         "-auto-orient",
         "-gravity", "center",
         "-background", "transparent",
@@ -93,28 +93,28 @@ module SafeImage
     end
 
     def convert_to_jpeg(input:, output:, quality: nil, timeout: Runner::DEFAULT_TIMEOUT)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("magick")
+      command = convert_command
       input = PathSafety.ensure_imagemagick_safe!(input)
       output = PathSafety.ensure_imagemagick_safe!(output)
       ext = File.extname(input).delete_prefix(".").downcase
       decoder = DECODERS[ext]
       source = decoder ? "#{decoder}:#{input}[0]" : input
-      argv = ["magick", source, "-auto-orient", "-background", "white", "-interlace", "none", "-flatten"]
+      argv = [command, source, "-auto-orient", "-background", "white", "-interlace", "none", "-flatten"]
       argv.concat(["-quality", Integer(quality).to_s]) if quality
       argv << output
       run_image_command(argv, output, ext, "jpg", timeout)
     end
 
     def convert_ico_to_png(input:, output:, timeout: Runner::DEFAULT_TIMEOUT)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("magick")
+      command = convert_command
       input = PathSafety.ensure_imagemagick_safe!(input)
       output = PathSafety.ensure_imagemagick_safe!(output)
-      argv = ["magick", "ico:#{input}[-1]", "-auto-orient", "-background", "transparent", output]
+      argv = [command, "ico:#{input}[-1]", "-auto-orient", "-background", "transparent", output]
       run_image_command(argv, output, "ico", "png", timeout)
     end
 
     def frame_count(path, timeout: Runner::DEFAULT_TIMEOUT, max_pixels: nil)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("identify")
+      raise UnsupportedFormatError, "ImageMagick identify not available" unless Runner.available?("identify")
       path = PathSafety.ensure_imagemagick_safe!(path)
       ext = File.extname(path).delete_prefix(".").downcase
       decoder = DECODERS.fetch(ext) { raise UnsupportedFormatError, "unsupported ImageMagick input format: #{ext.inspect}" }
@@ -127,12 +127,12 @@ module SafeImage
     end
 
     def letter_avatar(output:, size:, background_rgb:, letter:, pointsize:, font: "NimbusSans-Regular", timeout: Runner::DEFAULT_TIMEOUT)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("magick")
+      command = convert_command
       output = PathSafety.ensure_imagemagick_safe!(output)
       rgb = Array(background_rgb).map { |v| Integer(v) }
       raise ArgumentError, "background_rgb must have three channels" unless rgb.length == 3
       argv = [
-        "magick",
+        command,
         "-size", "#{Integer(size)}x#{Integer(size)}",
         "xc:rgb(#{rgb[0]},#{rgb[1]},#{rgb[2]})",
         "-pointsize", Integer(pointsize).to_s,
@@ -147,13 +147,19 @@ module SafeImage
     end
 
     def fix_orientation(input:, output: input, timeout: Runner::DEFAULT_TIMEOUT)
-      raise UnsupportedFormatError, "ImageMagick not available" unless Runner.available?("magick")
+      command = convert_command
       input = PathSafety.ensure_imagemagick_safe!(input)
       output = PathSafety.ensure_imagemagick_safe!(output)
       ext = File.extname(input).delete_prefix(".").downcase
       decoder = DECODERS.fetch(ext) { raise UnsupportedFormatError, "unsupported ImageMagick input format: #{ext.inspect}" }
-      argv = ["magick", "#{decoder}:#{input}[0]", "-auto-orient", output]
+      argv = [command, "#{decoder}:#{input}[0]", "-auto-orient", output]
       run_image_command(argv, output, ext, ext, timeout)
+    end
+
+    def convert_command
+      Runner.available?("magick") ? "magick" : Runner.resolve_executable!("convert") && "convert"
+    rescue UnsupportedFormatError
+      raise UnsupportedFormatError, "ImageMagick convert/magick not available"
     end
 
     def run_image_command(argv, output, input_format, output_format, timeout)
