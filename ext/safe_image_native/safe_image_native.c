@@ -4,7 +4,7 @@
 #include <string.h>
 #include <time.h>
 
-static VALUE mDIP;
+static VALUE mSafeImage;
 static VALUE mNative;
 static VALUE eError;
 static VALUE eUnsupported;
@@ -49,7 +49,7 @@ static void raise_vips(void) {
 static void init_vips_once(void) {
   static int initialized = 0;
   if (initialized) return;
-  if (VIPS_INIT("discourse_image_processing") != 0) raise_vips();
+  if (VIPS_INIT("safe_image") != 0) raise_vips();
 
   /* Avoid libvips operations that are explicitly tagged as unsafe for
    * untrusted input. Also block ImageMagick-backed loaders by class name;
@@ -323,13 +323,13 @@ static VALUE rb_crop_north(VALUE self, VALUE input_val, VALUE output_val, VALUE 
   return hash;
 }
 
-void Init_discourse_image_processing_native(void) {
-  mDIP = rb_define_module("DiscourseImageProcessing");
-  eError = rb_const_get(mDIP, rb_intern("Error"));
-  eUnsupported = rb_const_get(mDIP, rb_intern("UnsupportedFormatError"));
-  eInvalid = rb_const_get(mDIP, rb_intern("InvalidImageError"));
-  eLimit = rb_const_get(mDIP, rb_intern("LimitError"));
-  mNative = rb_define_module_under(mDIP, "Native");
+void Init_safe_image_native(void) {
+  mSafeImage = rb_define_module("SafeImage");
+  eError = rb_const_get(mSafeImage, rb_intern("Error"));
+  eUnsupported = rb_const_get(mSafeImage, rb_intern("UnsupportedFormatError"));
+  eInvalid = rb_const_get(mSafeImage, rb_intern("InvalidImageError"));
+  eLimit = rb_const_get(mSafeImage, rb_intern("LimitError"));
+  mNative = rb_define_module_under(mSafeImage, "Native");
   rb_define_singleton_method(mNative, "probe", rb_probe, 1);
   rb_define_singleton_method(mNative, "thumbnail", rb_thumbnail, 7);
   rb_define_singleton_method(mNative, "resize", rb_resize, 6);

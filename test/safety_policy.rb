@@ -1,16 +1,16 @@
 # frozen_string_literal: true
 
 require "tmpdir"
-require_relative "../lib/discourse_image_processing"
+require_relative "../lib/safe_image"
 
 Dir.mktmpdir do |dir|
   ps = File.join(dir, "ghostscript.ps")
   File.write(ps, "%!PS\n/Times-Roman findfont 12 scalefont setfont\n100 700 moveto (x) show\nshowpage\n")
 
   begin
-    DiscourseImageProcessing::Runner.run!(["magick", ps, File.join(dir, "out.png")])
+    SafeImage::Runner.run!(["magick", ps, File.join(dir, "out.png")])
     abort "ImageMagick unexpectedly processed PostScript"
-  rescue DiscourseImageProcessing::CommandError => e
+  rescue SafeImage::CommandError => e
     unless e.stderr.match?(/not authorized|security policy|no decode delegate/i)
       abort "unexpected ImageMagick denial message: #{e.stderr}"
     end
@@ -20,9 +20,9 @@ Dir.mktmpdir do |dir|
   File.write(pdf, "%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n")
 
   begin
-    DiscourseImageProcessing::Runner.run!(["magick", pdf, File.join(dir, "out2.png")])
+    SafeImage::Runner.run!(["magick", pdf, File.join(dir, "out2.png")])
     abort "ImageMagick unexpectedly processed PDF"
-  rescue DiscourseImageProcessing::CommandError => e
+  rescue SafeImage::CommandError => e
     unless e.stderr.match?(/not authorized|security policy|no decode delegate/i)
       abort "unexpected ImageMagick denial message: #{e.stderr}"
     end
@@ -38,23 +38,23 @@ Dir.mktmpdir do |dir|
   File.chmod(0o755, fake_magick)
 
   begin
-    DiscourseImageProcessing::Runner.run!(
+    SafeImage::Runner.run!(
       ["magick", ps, File.join(dir, "out3.png")],
       env: { "PATH" => fake_dir, "MAGICK_CONFIGURE_PATH" => "/tmp" }
     )
     abort "ImageMagick unexpectedly processed PostScript with env override"
-  rescue DiscourseImageProcessing::CommandError
+  rescue SafeImage::CommandError
   end
   abort "Runner used caller-controlled PATH" if File.exist?(fake_marker)
   puts "OK Runner ignores protected env overrides"
 end
 
 begin
-  original = DiscourseImageProcessing::Sandbox.method(:available?)
-  DiscourseImageProcessing::Sandbox.define_singleton_method(:available?) { false }
+  original = SafeImage::Sandbox.method(:available?)
+  SafeImage::Sandbox.define_singleton_method(:available?) { false }
   Dir.mktmpdir do |dir|
     begin
-      DiscourseImageProcessing.thumbnail(
+      SafeImage.thumbnail(
         input: File.expand_path("fixtures/images/huge.jpg", __dir__),
         output: File.join(dir, "x.jpg"),
         width: 10,
@@ -62,12 +62,12 @@ begin
         execution: :sandbox
       )
       abort "strict sandbox unexpectedly fell back to inline"
-    rescue DiscourseImageProcessing::Error => e
+    rescue SafeImage::Error => e
       abort "wrong sandbox error: #{e.message}" unless e.message.include?("sandbox execution requested")
     end
   end
 ensure
-  DiscourseImageProcessing::Sandbox.define_singleton_method(:available?, original) if original
+  SafeImage::Sandbox.define_singleton_method(:available?, original) if original
 end
 
 puts "OK strict sandbox does not silently degrade"

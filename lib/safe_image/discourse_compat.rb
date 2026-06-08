@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module DiscourseImageProcessing
+module SafeImage
   # Compatibility-shaped API for the operations Discourse currently performs in
   # OptimizedImage, UploadCreator, ShrinkUploadedImage and FileHelper.
   module DiscourseCompat
@@ -8,7 +8,7 @@ module DiscourseImageProcessing
 
     def resize(from, to, width, height, quality: nil, backend: :imagemagick, optimize: true, max_pixels: nil)
       if backend.to_sym == :vips
-        return DiscourseImageProcessing.thumbnail(
+        return SafeImage.thumbnail(
           input: from,
           output: to,
           width: width,
@@ -147,7 +147,7 @@ module DiscourseImageProcessing
     def compat_probe(path, backend:, max_pixels: nil)
       path = Pathname.new(path).expand_path.to_s
       if backend.to_sym == :vips
-        DiscourseImageProcessing.probe(path, max_pixels: max_pixels)
+        SafeImage.probe(path, max_pixels: max_pixels)
       else
         info = ImageMagickBackend.probe(path, max_pixels: max_pixels)
         Result.new(

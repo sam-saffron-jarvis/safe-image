@@ -2,9 +2,9 @@
 
 require "rake/extensiontask"
 
-Rake::ExtensionTask.new("discourse_image_processing_native") do |ext|
+Rake::ExtensionTask.new("safe_image_native") do |ext|
   ext.lib_dir = "lib"
-  ext.ext_dir = "ext/discourse_image_processing_native"
+  ext.ext_dir = "ext/safe_image_native"
 end
 
 task default: [:compile, :test]

@@ -1,5 +1,5 @@
 <policymap>
-  <!-- Defensive ImageMagick policy for discourse_image_processing compatibility
+  <!-- Defensive ImageMagick policy for safe_image compatibility
        backend. We only need raster image coders used explicitly by this gem. -->
   <policy domain="delegate" rights="none" pattern="*" />
   <policy domain="filter" rights="none" pattern="*" />

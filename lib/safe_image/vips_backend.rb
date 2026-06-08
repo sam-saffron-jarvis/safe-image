@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module DiscourseImageProcessing
+module SafeImage
   module VipsBackend
     module_function
 
@@ -11,7 +11,7 @@ module DiscourseImageProcessing
     end
 
     def downsize(input:, output:, dimensions:, format:, quality: 85, max_pixels: nil)
-      probe = DiscourseImageProcessing.probe(input, max_pixels: max_pixels)
+      probe = SafeImage.probe(input, max_pixels: max_pixels)
       scale = scale_for(probe.width, probe.height, dimensions)
       scale = [scale, 1.0].min
       if scale >= 1.0

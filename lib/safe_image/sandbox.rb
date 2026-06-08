@@ -4,7 +4,7 @@ require "json"
 require "rbconfig"
 require "tmpdir"
 
-module DiscourseImageProcessing
+module SafeImage
   module Sandbox
     module_function
 
@@ -76,7 +76,7 @@ module DiscourseImageProcessing
       payload = JSON.dump({ operation: operation, request: request })
       code = <<~'RUBY'
         require "json"
-        require "discourse_image_processing"
+        require "safe_image"
 
         def deep_symbolize(value)
           case value
@@ -95,11 +95,11 @@ module DiscourseImageProcessing
         args = request[:args] || []
         kwargs = deep_symbolize(request[:kwargs] || {})
 
-        result = DiscourseImageProcessing.with_sandbox_disabled do
-          DiscourseImageProcessing.__send__(operation, *args, **kwargs)
+        result = SafeImage.with_sandbox_disabled do
+          SafeImage.__send__(operation, *args, **kwargs)
         end
 
-        if defined?(DiscourseImageProcessing::Result) && result.is_a?(DiscourseImageProcessing::Result)
+        if defined?(SafeImage::Result) && result.is_a?(SafeImage::Result)
           puts JSON.dump({ __type: "Result", data: result.to_h })
         else
           puts JSON.dump({ __type: "Value", data: result })

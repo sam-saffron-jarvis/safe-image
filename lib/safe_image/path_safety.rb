@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module DiscourseImageProcessing
+module SafeImage
   module PathSafety
     SAFE_IMAGEMAGICK_PATH = %r{\A[\w\-\./]+\z}.freeze
 

@@ -1,135 +1,380 @@
-# discourse_image_processing
+# Safe Image
 
-A first-cut, security-oriented image processing boundary for Discourse.
+Safe Image is a small Ruby image-processing boundary for untrusted uploads.
 
-This gem intentionally does **not** depend on `ruby-vips`. It uses a tiny Ruby
-native extension that calls `libvips` directly, so Discourse has one small API
-surface for untrusted image bytes instead of scattered ImageMagick command
-construction.
+It gives an application one narrow API for probing, thumbnailing, resizing,
+cropping, converting, optimising, SVG sanitising, animation checks, favicon
+conversion, and letter-avatar generation. The default fast path uses a tiny
+native extension that calls `libvips` directly. Compatibility paths use
+ImageMagick, but with shell-free command execution and a restrictive bundled
+policy.
 
-## Current scope
+Safe Image started as a Discourse extraction: the public surface intentionally
+covers the image operations Discourse performs today. The useful part is more
+general: hostile image bytes are a lousy thing to spread across model callbacks,
+upload helpers, optimizer wrappers, and hand-built command strings.
 
-Implemented:
+## Security model
 
-- explicit-format probe for JPEG, PNG, WebP, HEIF/HEIC and AVIF
-- centre-cropped thumbnail generation with direct libvips backend
-- optional ImageMagick compatibility backend for Discourse-exact resize/crop/downsize/convert/orient semantics
-- explicit savers for JPEG, PNG, WebP and AVIF
-- metadata stripping on save
-- max-pixel guard
-- optimisation stage:
-  - `jpegoptim` for JPEG metadata stripping / optional quality cap
-  - `oxipng` for PNG lossless optimisation
-  - optional `pngquant` lossy PNG quantisation before `oxipng`
-- Discourse compatibility facade for current call sites:
-  - `resize`
-  - `crop`
-  - `downsize`
-  - `convert_to_jpeg`
-  - `fix_orientation`
-  - `convert_favicon_to_png`
-  - `frame_count`
-  - `animated?`
-  - `letter_avatar`
-  - `optimize_image!`
-  - `sanitize_svg!`
-- SVG sanitisation via stdlib REXML allowlist
-- ICO largest-frame extraction via explicit ImageMagick compatibility backend
-- libvips `VIPS_BLOCK_UNTRUSTED` equivalent enabled in-process
-- ImageMagick/Magick loaders blocked by libvips operation class
-- libvips cache disabled by default in-process
-- command execution uses argv arrays, not shell strings
+Safe Image is not magic pixie dust. It is a deliberately small choke point.
 
-Not implemented yet:
+What it does:
 
-- Nothing currently known that blocks Discourse integration; Landlock is optional, but when explicitly enabled it applies atomically to all public operations.
+- uses explicit argv arrays for external commands, never shell strings
+- uses explicit libvips loaders selected from allowlisted extensions
+- enables libvips' untrusted-operation block in-process
+- blocks libvips ImageMagick loader classes in the native extension
+- disables libvips cache by default in-process
+- strips metadata on generated images where applicable
+- enforces optional `max_pixels` guards before expensive work
+- ships a restrictive ImageMagick `policy.xml`
+- denies Ghostscript-backed formats and dangerous ImageMagick features:
+  - `PS`, `PS2`, `PS3`, `EPS`, `EPSF`, `PDF`, `XPS`, `PCL`
+  - `MSL`, `MVG`
+  - `HTTP`, `HTTPS`, `URL`
+  - delegates, filters, and `@file` indirection
+- supports optional Landlock subprocess sandboxing on Linux
 
-## Why this exists
-
-Discourse image processing is currently spread through models, helpers, upload
-code, ImageMagick command builders and optimiser wrappers. This gem is intended
-to become the single choke point for image decode/transform/optimise/validate.
-
-ImageMagick delegates are deliberately avoided in the default libvips path. Loading is
-by explicit libvips loader selected from an allowlisted extension, not generic
-sniffing/fallback. At initialisation the native extension enables libvips'
-untrusted-operation block and blocks known Magick loader classes
-(`VipsForeignLoadMagick*`).
-
-ImageMagick is available as an explicit compatibility backend only. It is never
-selected implicitly, it is called with argv arrays rather than shell strings, and
-its paths are restricted to a conservative absolute-path character set to avoid
-ImageMagick pseudo-filename option parsing surprises. The gem ships a restrictive
-ImageMagick `policy.xml` and sets `MAGICK_CONFIGURE_PATH` for child commands:
-Ghostscript-backed formats (`PS`, `EPS`, `PDF`, `XPS`, `PCL`, etc.), delegates,
-remote URL coders, filters, and `@file` indirection are denied.
+The ImageMagick backend is explicit. Safe Image will not silently fall from the
+libvips path into generic ImageMagick decoding.
 
 ## Install
 
-System dependency: `libvips` headers and library.
+System dependency:
 
-Optional command dependencies for compatibility/optimisation paths:
+- `libvips` headers and library, discoverable through `pkg-config vips`
 
-- `magick` for ImageMagick compatibility operations
+Optional command dependencies:
+
+- `magick` / `identify` for ImageMagick compatibility operations
 - `jpegoptim` for JPEG optimisation
 - `oxipng` for PNG lossless optimisation
 - `pngquant` for optional lossy PNG optimisation
 
-Ruby runtime dependencies:
+Ruby runtime dependency:
 
 - `rexml` for SVG sanitising
 
 Optional Ruby dependency:
 
-- `landlock` for Linux subprocess sandboxing. It is not a gem dependency;
-  install it in the host application if you want sandboxing.
+- `landlock` for Linux subprocess sandboxing
+
+`landlock` is intentionally **not** a gem dependency. Install it in the host
+application if you want sandboxing.
 
 ```bash
-gem build discourse_image_processing.gemspec
-gem install ./discourse_image_processing-0.1.0.gem
+gem build safe_image.gemspec
+gem install ./safe_image-0.1.0.gem
 ```
 
-## Usage
+```ruby
+require "safe_image"
+```
+
+## Return values
+
+Image-producing operations return `SafeImage::Result`:
 
 ```ruby
-require "discourse_image_processing"
+SafeImage::Result[
+  input:,          # source path or "generated"
+  output:,         # output path, nil for probe
+  input_format:,   # "jpg", "png", "webp", "heic", "avif", etc.
+  output_format:,  # output format, nil for probe
+  width:,
+  height:,
+  filesize:,
+  backend:,        # "libvips-direct" or "imagemagick"
+  duration_ms:,
+  optimizer:       # optimizer tool list for thumbnail path, otherwise nil
+]
+```
 
-info = DiscourseImageProcessing.probe("input.jpg", max_pixels: 40_000_000)
+Optimizer operations return a hash:
 
-result = DiscourseImageProcessing.thumbnail(
-  input: "input.jpg",
+```ruby
+{
+  format: "jpg",
+  before_bytes: 123_456,
+  after_bytes: 120_000,
+  saved_bytes: 3_456,
+  tools: ["jpegoptim"]
+}
+```
+
+## Core API
+
+### `SafeImage.probe(path, max_pixels: nil)`
+
+Reads image metadata through the direct libvips backend.
+
+Supported inputs:
+
+- `jpg` / `jpeg`
+- `png`
+- `webp`
+- `heic` / `heif`
+- `avif`
+
+```ruby
+info = SafeImage.probe("upload.jpg", max_pixels: 40_000_000)
+puts "#{info.width}x#{info.height} #{info.input_format}"
+```
+
+Raises `SafeImage::LimitError` if `width * height > max_pixels`.
+
+### `SafeImage.thumbnail(...)`
+
+Creates a center-cropped thumbnail.
+
+```ruby
+result = SafeImage.thumbnail(
+  input: "upload.jpg",
   output: "thumb.jpg",
   width: 600,
   height: 400,
+  format: nil,              # inferred from output extension when nil
   quality: 85,
-  max_pixels: 40_000_000
+  max_pixels: 40_000_000,
+  backend: :vips,           # :vips or :imagemagick
+  optimize: true,
+  optimize_mode: :lossless, # :lossless or :lossy for PNG optimisation
+  execution: :inline        # :inline, :sandbox, :sandbox_if_available
 )
-
-puts result.width
-puts result.height
-puts result.filesize
-
-# Compatibility-shaped methods for Discourse integration:
-DiscourseImageProcessing.resize("in.jpg", "thumb.jpg", 600, 400, backend: :vips)
-DiscourseImageProcessing.crop("in.jpg", "avatar.jpg", 240, 240, backend: :imagemagick)
-DiscourseImageProcessing.downsize("in.png", "smaller.png", "50%")
-DiscourseImageProcessing.convert_to_jpeg("in.png", "out.jpg", quality: 85)
-DiscourseImageProcessing.fix_orientation("in.jpg")
-DiscourseImageProcessing.convert_favicon_to_png("favicon.ico", "favicon.png")
-DiscourseImageProcessing.frame_count("maybe-animated.gif")
-DiscourseImageProcessing.animated?("maybe-animated.gif")
-DiscourseImageProcessing.letter_avatar(output: "avatar.png", size: 360, background_rgb: [1, 2, 3], letter: "S")
-DiscourseImageProcessing.optimize_image!("out.jpg")
-DiscourseImageProcessing.optimize_image!("out.png", allow_lossy_png: true)
-DiscourseImageProcessing.sanitize_svg!("icon.svg")
-
-# Enable Landlock globally. This is atomic: after this point every public
-# operation is executed through the sandbox worker. If Landlock is unavailable,
-# this raises instead of silently degrading.
-DiscourseImageProcessing.enable_sandbox!
-DiscourseImageProcessing.sandbox_enabled?
-DiscourseImageProcessing.sandbox_available?
 ```
+
+Supported outputs for the direct libvips backend:
+
+- `jpg` / `jpeg`
+- `png`
+- `webp`
+- `avif`
+
+`execution: :sandbox` is fail-closed: it raises if Landlock is unavailable.
+`execution: :sandbox_if_available` uses the sandbox only when available.
+
+## Compatibility API
+
+These methods are shaped around the image operations Discourse currently
+performs. They are useful outside Discourse too, but the names are deliberately
+boring because they map to common upload-pipeline tasks.
+
+### `SafeImage.resize(from, to, width, height, quality: nil, backend: :imagemagick, optimize: true, max_pixels: nil)`
+
+Creates a resized thumbnail-style output.
+
+```ruby
+SafeImage.resize("upload.jpg", "thumb.jpg", 600, 400)
+SafeImage.resize("upload.jpg", "thumb.jpg", 600, 400, backend: :vips, quality: 85)
+```
+
+Backends:
+
+- `:imagemagick` default compatibility path
+- `:vips` direct libvips path
+
+### `SafeImage.crop(from, to, width, height, quality: nil, backend: :imagemagick, optimize: true, max_pixels: nil)`
+
+Creates a north-cropped image. This matches the avatar/optimized-image crop
+shape used by Discourse.
+
+```ruby
+SafeImage.crop("upload.jpg", "avatar.jpg", 240, 240)
+SafeImage.crop("upload.jpg", "avatar.jpg", 240, 240, backend: :vips)
+```
+
+### `SafeImage.downsize(from, to, dimensions, backend: :imagemagick, optimize: true, max_pixels: nil, quality: 85)`
+
+Downsizes an image using ImageMagick-style geometry strings.
+
+```ruby
+SafeImage.downsize("large.png", "small.png", "50%")
+SafeImage.downsize("large.png", "small.png", "100x100>", backend: :vips)
+SafeImage.downsize("large.png", "small.png", "400000@", backend: :vips)
+```
+
+The direct vips backend supports the geometry forms covered by the test suite:
+percentage, bounding box with `>`, and pixel-area cap with `@`.
+
+### `SafeImage.convert_to_jpeg(from, to, quality: nil, optimize: true, max_pixels: nil)`
+
+Converts an input image to JPEG through the hardened ImageMagick compatibility
+backend.
+
+```ruby
+SafeImage.convert_to_jpeg("upload.png", "upload.jpg", quality: 85)
+SafeImage.convert_to_jpeg("upload.heic", "upload.jpg", quality: 85)
+```
+
+### `SafeImage.fix_orientation(from, to = from, max_pixels: nil)`
+
+Applies EXIF orientation through ImageMagick. If `to` is omitted, the file is
+rewritten in place.
+
+```ruby
+SafeImage.fix_orientation("upload.jpg")
+SafeImage.fix_orientation("upload.jpg", "oriented.jpg")
+```
+
+### `SafeImage.convert_favicon_to_png(from, to, optimize: true, max_pixels: nil)`
+
+Extracts the largest ICO frame and writes PNG.
+
+```ruby
+SafeImage.convert_favicon_to_png("favicon.ico", "favicon.png")
+```
+
+### `SafeImage.frame_count(path, max_pixels: nil)`
+
+Returns the frame count using the hardened ImageMagick identify path.
+
+```ruby
+frames = SafeImage.frame_count("animated.gif")
+```
+
+### `SafeImage.animated?(path, max_pixels: nil)`
+
+Returns `true` when `frame_count(path) > 1`.
+
+```ruby
+SafeImage.animated?("animated.webp")
+```
+
+### `SafeImage.letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "NimbusSans-Regular")`
+
+Generates a square letter avatar PNG.
+
+```ruby
+SafeImage.letter_avatar(
+  output: "avatar.png",
+  size: 360,
+  background_rgb: [1, 2, 3],
+  letter: "S",
+  font: "Adwaita-Sans"
+)
+```
+
+### `SafeImage.optimize(path, mode: :lossless, strip_metadata: true, quality: nil, strict: true)`
+
+Optimises an existing JPEG or PNG in place.
+
+```ruby
+SafeImage.optimize("image.jpg", quality: 85)
+SafeImage.optimize("image.png")
+SafeImage.optimize("image.png", mode: :lossy, quality: "65-90")
+```
+
+JPEG path:
+
+- uses `jpegoptim`
+- `quality:` maps to `jpegoptim --max`
+- metadata is stripped unless `strip_metadata: false`
+
+PNG path:
+
+- uses `oxipng` for lossless optimisation
+- when `mode: :lossy`, uses `pngquant` first for PNGs smaller than 500 KB,
+  then `oxipng`
+
+When `strict: true`, missing optimizer tools raise. When `strict: false`, missing
+optimizer tools are tolerated.
+
+### `SafeImage.optimize_image!(path, allow_lossy_png: false, strip_metadata: true, quality: nil, strict: true)`
+
+Compatibility wrapper around `SafeImage.optimize`.
+
+```ruby
+SafeImage.optimize_image!("image.jpg")
+SafeImage.optimize_image!("image.png", allow_lossy_png: true)
+```
+
+### `SafeImage.sanitize_svg!(path)`
+
+Sanitises an SVG in place using a small REXML allowlist.
+
+```ruby
+result = SafeImage.sanitize_svg!("icon.svg")
+puts result[:sanitized]
+```
+
+The sanitizer removes unsafe elements/attributes such as scripts and event
+handlers. It is intentionally conservative rather than a full browser-grade SVG
+implementation.
+
+## Atomic Landlock sandboxing
+
+Landlock support is optional, but atomic once enabled.
+
+```ruby
+SafeImage.sandbox_available? # => true/false
+SafeImage.enable_sandbox!    # raises if unavailable
+SafeImage.sandbox_enabled?   # => true
+```
+
+After `SafeImage.enable_sandbox!`, every public operation routes through the
+sandbox worker:
+
+- `probe`
+- `thumbnail`
+- `optimize`
+- `resize`
+- `crop`
+- `downsize`
+- `convert_to_jpeg`
+- `fix_orientation`
+- `convert_favicon_to_png`
+- `frame_count`
+- `animated?`
+- `letter_avatar`
+- `optimize_image!`
+- `sanitize_svg!`
+
+There is no silent fallback after global sandbox enablement. If sandbox setup or
+a sandboxed command fails, the operation fails.
+
+The sandbox grants read/write access only to the paths inferred from the
+operation arguments, plus runtime/library paths and temporary directories needed
+by Ruby, libvips, ImageMagick, and optimizer tools. Network syscalls are denied
+through the Landlock helper's seccomp layer.
+
+## Discourse parity
+
+Safe Image currently covers the image-operation surface Discourse performs in:
+
+- optimized image generation
+- upload preprocessing
+- thumbnail generation
+- avatar cropping / letter avatars
+- favicon conversion
+- HEIC/PNG-to-JPEG conversion
+- orientation fixing
+- animated image detection
+- JPEG/PNG optimisation
+- SVG sanitising
+
+The claim is operation parity, not byte-for-byte output identity across all
+ImageMagick/libvips versions. The test suite includes golden compatibility
+checks, ImageMagick parity checks, policy-denial checks, and a real-image atomic
+sandbox sweep over the full public operation list.
+
+## Development
+
+```bash
+bundle install
+bundle exec rake
+```
+
+`bundle exec rake` builds the native extension and runs:
+
+- smoke tests
+- compatibility smoke tests
+- golden operation tests
+- ImageMagick parity tests
+- ImageMagick safety-policy tests
+- atomic Landlock all-operation tests when Landlock is available
+
+The atomic sandbox suite skips when `landlock` is not installed or unavailable on
+the host kernel.
 
 ## License
 

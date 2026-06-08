@@ -2,7 +2,7 @@
 
 require "tempfile"
 
-module DiscourseImageProcessing
+module SafeImage
   module Optimizer
     module_function
 

@@ -3,7 +3,7 @@
 require "fileutils"
 require "pathname"
 
-module DiscourseImageProcessing
+module SafeImage
   class Processor
     SUPPORTED_INPUTS = %w[jpg jpeg png webp heic heif avif].freeze
     SUPPORTED_OUTPUTS = %w[jpg jpeg png webp avif].freeze

@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-require_relative "discourse_image_processing/version"
+require_relative "safe_image/version"
 
-module DiscourseImageProcessing
+module SafeImage
   class Error < StandardError; end
   class UnsupportedFormatError < Error; end
   class UnsafePathError < Error; end
@@ -10,19 +10,19 @@ module DiscourseImageProcessing
   class LimitError < Error; end
 end
 
-require_relative "discourse_image_processing/native"
-require_relative "discourse_image_processing/result"
-require_relative "discourse_image_processing/runner"
-require_relative "discourse_image_processing/sandbox"
-require_relative "discourse_image_processing/path_safety"
-require_relative "discourse_image_processing/optimizer"
-require_relative "discourse_image_processing/svg_sanitizer"
-require_relative "discourse_image_processing/image_magick_backend"
-require_relative "discourse_image_processing/vips_backend"
-require_relative "discourse_image_processing/processor"
-require_relative "discourse_image_processing/discourse_compat"
+require_relative "safe_image/native"
+require_relative "safe_image/result"
+require_relative "safe_image/runner"
+require_relative "safe_image/sandbox"
+require_relative "safe_image/path_safety"
+require_relative "safe_image/optimizer"
+require_relative "safe_image/svg_sanitizer"
+require_relative "safe_image/image_magick_backend"
+require_relative "safe_image/vips_backend"
+require_relative "safe_image/processor"
+require_relative "safe_image/discourse_compat"
 
-module DiscourseImageProcessing
+module SafeImage
   module_function
 
   @sandbox_enabled = false
@@ -37,7 +37,7 @@ module DiscourseImageProcessing
   end
 
   def sandbox_enabled?
-    @sandbox_enabled && ENV["DISCOURSE_IMAGE_PROCESSING_SANDBOX_CHILD"] != "1"
+    @sandbox_enabled && ENV["SAFE_IMAGE_SANDBOX_CHILD"] != "1"
   end
 
   def with_sandbox_disabled

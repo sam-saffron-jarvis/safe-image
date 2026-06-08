@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module DiscourseImageProcessing
+module SafeImage
   Result = Data.define(
     :input,
     :output,

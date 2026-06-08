@@ -3,7 +3,7 @@
 require "rexml/document"
 require "rexml/formatters/default"
 
-module DiscourseImageProcessing
+module SafeImage
   module SvgSanitizer
     ALLOWED_ELEMENTS = %w[
       svg g defs title desc path rect circle ellipse line polyline polygon text tspan
