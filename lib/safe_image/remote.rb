@@ -32,6 +32,42 @@ module SafeImage
 
     EXTENSIONS = %w[.jpg .jpeg .png .gif .webp .heic .heif .avif .ico .svg].freeze
 
+    BLOCKED_IP_RANGES = [
+      # IPv4 special-use / non-public ranges. Default remote fetching is for
+      # public Internet images only; callers probing trusted internal URLs must
+      # opt in with allow_private: true.
+      "0.0.0.0/8",          # current network
+      "10.0.0.0/8",         # RFC1918 private-use
+      "100.64.0.0/10",      # RFC6598 carrier-grade NAT
+      "127.0.0.0/8",        # loopback
+      "169.254.0.0/16",     # RFC3927 link-local
+      "172.16.0.0/12",      # RFC1918 private-use
+      "192.0.0.0/24",       # IETF protocol assignments
+      "192.0.2.0/24",       # TEST-NET-1
+      "192.168.0.0/16",     # RFC1918 private-use
+      "198.18.0.0/15",      # benchmark testing
+      "198.51.100.0/24",    # TEST-NET-2
+      "203.0.113.0/24",     # TEST-NET-3
+      "224.0.0.0/4",        # multicast
+      "240.0.0.0/4",        # reserved / future-use
+      "255.255.255.255/32", # limited broadcast
+
+      # IPv6 special-use / non-public ranges.
+      "::/128",             # unspecified
+      "::1/128",            # loopback
+      "::/96",              # deprecated IPv4-compatible IPv6
+      "::ffff:0:0/96",      # IPv4-mapped IPv6
+      "64:ff9b::/96",       # well-known NAT64 prefix
+      "64:ff9b:1::/48",     # local-use NAT64 prefix
+      "100::/64",           # discard-only prefix
+      "2001::/23",          # IETF protocol assignments, incl. Teredo/benchmarking
+      "2001:db8::/32",      # documentation
+      "2002::/16",          # 6to4
+      "fc00::/7",           # unique local address
+      "fe80::/10",          # link-local unicast
+      "ff00::/8"            # multicast
+    ].map { |range| IPAddr.new(range) }.freeze
+
     def fetch(url, max_bytes: DEFAULT_MAX_BYTES, max_redirects: DEFAULT_MAX_REDIRECTS, open_timeout: DEFAULT_OPEN_TIMEOUT, read_timeout: DEFAULT_READ_TIMEOUT, allow_private: false, headers: {})
       uri = parse_uri(url)
       response = request(uri, max_bytes: max_bytes, max_redirects: max_redirects, open_timeout: open_timeout, read_timeout: read_timeout, allow_private: allow_private, headers: headers)
@@ -125,12 +161,19 @@ module SafeImage
     def validate_uri!(uri, allow_private:)
       return if allow_private
 
-      Resolv.each_address(uri.host) do |address|
+      addresses = Resolv.getaddresses(uri.host)
+      raise UnsafePathError, "remote image host did not resolve" if addresses.empty?
+
+      addresses.each do |address|
         ip = IPAddr.new(address)
-        if ip.loopback? || ip.link_local? || ip.private? || ip.to_s == "0.0.0.0" || ip.to_s == "::"
-          raise UnsafePathError, "remote image host resolves to a private address"
+        if blocked_ip?(ip)
+          raise UnsafePathError, "remote image host resolves to a non-public address"
         end
       end
+    end
+
+    def blocked_ip?(ip)
+      BLOCKED_IP_RANGES.any? { |range| range.include?(ip) }
     end
 
     def extension_for(uri, content_type)

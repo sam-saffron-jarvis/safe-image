@@ -219,7 +219,9 @@ Remote fetching is deliberately conservative:
 - redirects are capped
 - open/read timeouts are capped
 - response size is capped by `max_bytes`
-- private, loopback, and link-local resolved addresses are rejected by default
+- private, loopback, link-local, multicast, documentation, benchmarking,
+  carrier-grade NAT, IPv4-mapped IPv6, NAT64, 6to4/Teredo, and other
+  special-use resolved addresses are rejected by default
 - no image decoding happens directly from the socket
 
 Set `allow_private: true` only when the caller has already made an SSRF decision
