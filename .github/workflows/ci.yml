@@ -19,7 +19,8 @@ jobs:
           sudo apt-get install -y libvips-dev imagemagick jpegoptim pngquant
           if ! command -v oxipng >/dev/null; then
             cargo install oxipng --locked
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            sudo install -m 0755 "$HOME/.cargo/bin/oxipng" /usr/local/bin/oxipng
           fi
+          command -v convert identify jpegoptim oxipng pngquant
       - name: Run tests
         run: bundle exec rake
