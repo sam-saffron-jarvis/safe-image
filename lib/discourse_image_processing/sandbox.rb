@@ -11,7 +11,7 @@ module DiscourseImageProcessing
     DEFAULT_RLIMITS = {
       cpu_seconds: 30,
       memory_bytes: 2 * 1024 * 1024 * 1024,
-      file_size_bytes: 256 * 1024 * 1024,
+      file_size_bytes: 1024 * 1024 * 1024,
       open_files: 256
     }.freeze
 

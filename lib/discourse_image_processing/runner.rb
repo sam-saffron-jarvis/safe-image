@@ -28,6 +28,8 @@ module DiscourseImageProcessing
       "PATH" => TRUSTED_PATH,
       "MAGICK_CONFIGURE_PATH" => IMAGEMAGICK_POLICY_PATH,
       "MAGICK_TEMPORARY_PATH" => Dir.tmpdir,
+      "HOME" => Dir.tmpdir,
+      "XDG_CACHE_HOME" => Dir.tmpdir,
       "VIPS_BLOCK_UNTRUSTED" => "1"
     }.freeze
 
