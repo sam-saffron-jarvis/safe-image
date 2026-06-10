@@ -33,12 +33,24 @@ module SafeImage
 
     JPEG_MAGIC = "\xFF\xD8\xFF".b
 
+    def setup
+      super
+      configure_safe_image
+    end
+
     def teardown
       FileUtils.remove_entry(@tmpdir) if @tmpdir
       super
     end
 
     private
+
+    # Tests run against the native backend without the sandbox by default;
+    # configure! is re-callable (last call wins), so individual tests
+    # reconfigure to exercise other combinations.
+    def configure_safe_image(backend: :vips, landlock: false, **options)
+      SafeImage.configure!(backend: backend, landlock: landlock, **options)
+    end
 
     def tmpdir
       @tmpdir ||= Dir.mktmpdir("safe_image-test-")

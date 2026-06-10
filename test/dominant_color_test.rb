@@ -14,27 +14,25 @@ module SafeImage
       assert_match HEX_COLOR, SafeImage.dominant_color(GIF, max_pixels: PNG_PIXELS)
     end
 
-    def test_solid_color_image_reports_its_color
+    def test_solid_color_image_reports_its_color_on_both_backends
       path = tmp_path("solid.png")
       SafeImage.letter_avatar(output: path, size: 16, background_rgb: [255, 0, 0], letter: " ", font: "Adwaita-Sans")
 
       assert_equal "FF0000", SafeImage.dominant_color(path)
-      assert_equal "FF0000", SafeImage.dominant_color(path, backend: :vips)
-      assert_equal "FF0000", SafeImage.dominant_color(path, backend: :imagemagick)
-    end
 
-    def test_explicit_backends_return_hex_colors
-      assert_match HEX_COLOR, SafeImage.dominant_color(PNG, max_pixels: PNG_PIXELS, backend: :vips)
-      assert_match HEX_COLOR, SafeImage.dominant_color(PNG, max_pixels: PNG_PIXELS, backend: :imagemagick)
-      assert_match HEX_COLOR, SafeImage.dominant_color(GIF, max_pixels: PNG_PIXELS, backend: :vips)
+      configure_safe_image(backend: :imagemagick)
+      assert_equal "FF0000", SafeImage.dominant_color(path)
     end
 
     # vips computes the exact per-channel mean while ImageMagick averages
     # through its 1x1 resize filter, so allow a small per-channel drift.
     def test_backends_roughly_agree
       [PNG, GIF].each do |fixture|
-        vips = SafeImage.dominant_color(fixture, max_pixels: PNG_PIXELS, backend: :vips)
-        magick = SafeImage.dominant_color(fixture, max_pixels: PNG_PIXELS, backend: :imagemagick)
+        vips = SafeImage.dominant_color(fixture, max_pixels: PNG_PIXELS)
+
+        configure_safe_image(backend: :imagemagick)
+        magick = SafeImage.dominant_color(fixture, max_pixels: PNG_PIXELS)
+        configure_safe_image(backend: :vips)
 
         vips.scan(/../).zip(magick.scan(/../)).each do |v, m|
           assert_in_delta v.to_i(16), m.to_i(16), 8,
@@ -43,14 +41,15 @@ module SafeImage
       end
     end
 
-    def test_vips_backend_rejects_formats_outside_its_loader_allowlist
-      assert_raises(UnsupportedFormatError) do
-        SafeImage.dominant_color(ICO, backend: :vips)
-      end
-    end
+    def test_ico_dominant_color_on_both_backends
+      # vips backend: pure-Ruby ICO decode, vips averages the pixels.
+      vips = SafeImage.dominant_color(ICO)
+      assert_match HEX_COLOR, vips
 
-    def test_ico_routes_through_the_ruby_decoder
-      assert_match HEX_COLOR, SafeImage.dominant_color(ICO)
+      # imagemagick backend: ImageMagick's own ico decoder. The fixture is a
+      # single pixel, so the backends must agree exactly.
+      configure_safe_image(backend: :imagemagick)
+      assert_equal vips, SafeImage.dominant_color(ICO)
     end
 
     def test_heic
@@ -59,13 +58,11 @@ module SafeImage
       end
     end
 
-    def test_rejects_unknown_backend
-      assert_raises(ArgumentError) { SafeImage.dominant_color(PNG, backend: :graphicsmagick) }
-    end
-
-    def test_enforces_max_pixels
+    def test_enforces_max_pixels_on_both_backends
       assert_raises(LimitError) { SafeImage.dominant_color(JPG, max_pixels: 1_000) }
-      assert_raises(LimitError) { SafeImage.dominant_color(JPG, max_pixels: 1_000, backend: :imagemagick) }
+
+      configure_safe_image(backend: :imagemagick)
+      assert_raises(LimitError) { SafeImage.dominant_color(JPG, max_pixels: 1_000) }
     end
 
     def test_rejects_svg
@@ -85,7 +82,7 @@ module SafeImage
       link = tmp_path("link.png")
       File.symlink(target, link)
 
-      assert_raises(UnsafePathError) { SafeImage.dominant_color(link, backend: :vips) }
+      assert_raises(UnsafePathError) { SafeImage.dominant_color(link) }
     end
   end
 end

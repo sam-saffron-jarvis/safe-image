@@ -4,23 +4,31 @@ require_relative "safe_image/version"
 
 module SafeImage
   class Error < StandardError; end
+
+  # Raised when any operation is attempted before SafeImage.configure!.
+  class NotConfiguredError < Error; end
+
   class UnsupportedFormatError < Error; end
 
-  # Raised when libvips cannot be loaded at runtime. Subclasses
-  # UnsupportedFormatError so the :auto backend routing treats a missing
-  # libvips like any other missing capability and falls back to the
-  # ImageMagick compatibility paths; explicit backend: :vips calls fail
-  # closed with this error.
+  # Raised when libvips cannot be loaded at runtime. configure!(backend: :vips)
+  # surfaces this at boot; operations never fall back to ImageMagick.
   class VipsUnavailableError < UnsupportedFormatError; end
   class UnsafePathError < Error; end
   class InvalidImageError < Error; end
   class LimitError < Error; end
 
-  # Default decompression-bomb ceiling for the libvips processing path when the
-  # caller does not pass an explicit max_pixels. Mirrored in the native
-  # extension (SAFE_IMAGE_DEFAULT_MAX_PIXELS) and aligned with the 128MP area
-  # limit on the ImageMagick path. Pass max_pixels to raise or lower it.
+  # Default decompression-bomb ceiling when configure! is not given an explicit
+  # max_pixels. Mirrored in the native binding (SAFE_IMAGE_DEFAULT_MAX_PIXELS)
+  # and aligned with the 128MP area limit on the ImageMagick path. Per-call
+  # max_pixels: overrides the configured value.
   DEFAULT_MAX_PIXELS = 128 * 1024 * 1024
+
+  BACKENDS = %i[vips imagemagick].freeze
+
+  # Process-wide configuration. configure! builds a frozen instance and swaps
+  # it in with a single assignment, so readers never observe a half-applied
+  # config.
+  Config = Data.define(:backend, :landlock, :max_pixels)
 end
 
 require_relative "safe_image/native"
@@ -42,46 +50,79 @@ require_relative "safe_image/discourse_compat"
 module SafeImage
   module_function
 
-  @sandbox_enabled = false
+  @config = nil
 
-  def enable_sandbox!
-    raise Error, "landlock sandbox requested but unavailable" unless Sandbox.available?
-    @sandbox_enabled = true
+  # Decides, in one place, everything that varies by host: which backend
+  # decodes untrusted bytes, whether operations run inside the Landlock
+  # sandbox, and the default decompression-bomb ceiling. Must be called before
+  # any operation; calling it again replaces the configuration.
+  #
+  # Validation is eager so a misconfigured host fails at boot rather than on
+  # the first request.
+  def configure!(backend:, landlock:, max_pixels: DEFAULT_MAX_PIXELS)
+    backend = backend.to_sym
+    unless BACKENDS.include?(backend)
+      raise ArgumentError, "unknown backend: #{backend.inspect} (expected :vips or :imagemagick)"
+    end
+    unless [true, false].include?(landlock)
+      raise ArgumentError, "landlock must be true or false, got: #{landlock.inspect}"
+    end
+    max_pixels = Integer(max_pixels)
+    raise ArgumentError, "max_pixels must be positive" if max_pixels <= 0
+
+    case backend
+    when :vips
+      begin
+        VipsGlue.init!
+      rescue VipsUnavailableError => e
+        raise Error, "backend: :vips requested but libvips is unavailable: #{e.message}"
+      end
+    when :imagemagick
+      unless Runner.available?("magick") || Runner.available?("convert")
+        raise Error, "backend: :imagemagick requested but no magick/convert executable was found"
+      end
+    end
+    if landlock && !Sandbox.available?
+      raise Error, "landlock: true requested but the Landlock sandbox is unavailable on this host"
+    end
+
+    @config = Config.new(backend: backend, landlock: landlock, max_pixels: max_pixels)
   end
 
-  def disable_sandbox!
-    @sandbox_enabled = false
+  def config
+    @config || raise(NotConfiguredError, "call SafeImage.configure!(backend: :vips | :imagemagick, landlock: true | false) before using SafeImage")
   end
 
-  def sandbox_enabled?
-    @sandbox_enabled && ENV["SAFE_IMAGE_SANDBOX_CHILD"] != "1"
-  end
-
-  def with_sandbox_disabled
-    previous = @sandbox_enabled
-    @sandbox_enabled = false
-    yield
-  ensure
-    @sandbox_enabled = previous
-  end
+  def configured? = !@config.nil?
 
   def sandbox_available? = Sandbox.available?
 
-  def sandbox_call(operation, args: [], kwargs: {})
-    Sandbox.public_call!(operation, args: args, kwargs: kwargs)
+  # Internal: whether operations must route through the sandbox worker. False
+  # before configure! (so configure!'s own availability probes can run
+  # commands) and inside worker children (so sandboxed operations never nest).
+  def sandbox?
+    !!@config&.landlock && ENV["SAFE_IMAGE_SANDBOX_CHILD"] != "1"
+  end
+
+  # Internal: per-call max_pixels overrides the configured default.
+  def resolved_max_pixels(max_pixels)
+    max_pixels.nil? ? config.max_pixels : max_pixels
   end
 
   def maybe_sandbox(operation, args: [], kwargs: {})
-    return yield unless sandbox_enabled?
+    config
+    return yield unless sandbox?
 
-    sandbox_call(operation, args: args, kwargs: kwargs)
+    Sandbox.public_call!(operation, args: args, kwargs: kwargs)
   end
 
   def probe(path, max_pixels: nil)
     maybe_sandbox(:probe, args: [path], kwargs: { max_pixels: max_pixels }) do
       path = PathSafety.local_path(path)
+      max_pixels = resolved_max_pixels(max_pixels)
 
-      if File.extname(path).downcase == ".svg"
+      case File.extname(path).downcase
+      when ".svg"
         info = SvgMetadata.probe(path, max_pixels: max_pixels)
         Result.new(
           input: File.expand_path(path),
@@ -95,7 +136,7 @@ module SafeImage
           duration_ms: info.fetch(:duration_ms),
           optimizer: nil
         )
-      elsif File.extname(path).downcase == ".ico"
+      when ".ico"
         # Pure-Ruby directory parse; reports the largest entry's dimensions.
         info = Ico.probe(path, max_pixels: max_pixels)
         Result.new(
@@ -111,9 +152,10 @@ module SafeImage
           optimizer: nil
         )
       else
-        begin
+        case config.backend
+        when :vips
           Processor.new(max_pixels: max_pixels).probe(path)
-        rescue UnsupportedFormatError
+        when :imagemagick
           info = ImageMagickBackend.probe(path, max_pixels: max_pixels)
           Result.new(
             input: File.expand_path(path),
@@ -172,42 +214,33 @@ module SafeImage
         # No EXIF orientation in either format; upright by definition.
         1
       else
-        # Header-only native read; ImageMagick identify remains the fallback
-        # for formats outside the native loader allowlist.
-        begin
+        max_pixels = resolved_max_pixels(max_pixels)
+        case config.backend
+        when :vips
+          # Header-only native read.
           VipsBackend.orientation(path, max_pixels: max_pixels)
-        rescue UnsupportedFormatError
-          probe(path, max_pixels: max_pixels) if max_pixels
+        when :imagemagick
+          # Probe first: rejects undecodable files and enforces the pixel cap.
+          ImageMagickBackend.probe(path, max_pixels: max_pixels)
           ImageMagickBackend.orientation(path)
         end
       end
     end
   end
 
-  def dominant_color(path, max_pixels: nil, backend: :auto)
-    maybe_sandbox(:dominant_color, args: [path], kwargs: { max_pixels: max_pixels, backend: backend }) do
-      case backend.to_sym
+  def dominant_color(path, max_pixels: nil)
+    maybe_sandbox(:dominant_color, args: [path], kwargs: { max_pixels: max_pixels }) do
+      max_pixels = resolved_max_pixels(max_pixels)
+      case config.backend
       when :vips
-        VipsBackend.dominant_color(path, max_pixels: max_pixels)
-      when :imagemagick, :magick
-        imagemagick_dominant_color(path, max_pixels: max_pixels)
-      when :auto
-        # Format routing, mirroring probe: the native vips path handles every
-        # format it can decode; ico goes through the pure-Ruby ICO decoder.
-        # Decode failures raise InvalidImageError and are never retried on
-        # another backend.
-        begin
+        if File.extname(PathSafety.local_path(path)).downcase == ".ico"
+          # Pure-Ruby ICO decode; vips only averages the decoded pixels.
+          Ico.dominant_color(path, max_pixels: max_pixels)
+        else
           VipsBackend.dominant_color(path, max_pixels: max_pixels)
-        rescue UnsupportedFormatError
-          begin
-            raise unless File.extname(PathSafety.local_path(path)).downcase == ".ico"
-            Ico.dominant_color(path, max_pixels: max_pixels)
-          rescue UnsupportedFormatError
-            imagemagick_dominant_color(path, max_pixels: max_pixels)
-          end
         end
-      else
-        raise ArgumentError, "unknown backend: #{backend.inspect}"
+      when :imagemagick
+        imagemagick_dominant_color(path, max_pixels: max_pixels)
       end
     end
   end
@@ -224,10 +257,12 @@ module SafeImage
   end
 
   def remote_info(url, **kwargs)
+    config
     Remote.info(url, **kwargs)
   end
 
   def remote_size(url, **kwargs)
+    config
     Remote.size(url, **kwargs)
   end
 
@@ -236,22 +271,26 @@ module SafeImage
   end
 
   def remote_type(url, **kwargs)
+    config
     Remote.type(url, **kwargs)
   end
 
   def remote_animated?(url, **kwargs)
+    config
     Remote.animated?(url, **kwargs)
   end
 
   def remote_dominant_color(url, **kwargs)
+    config
     Remote.dominant_color(url, **kwargs)
   end
 
   def fetch_remote(url, **kwargs, &block)
+    config
     Remote.fetch(url, **kwargs, &block)
   end
 
-  def thumbnail(input:, output:, width:, height:, format: nil, quality: 85, max_pixels: nil, backend: :auto, optimize: false, optimize_mode: :lossless, execution: :inline, encoder: :auto, chroma_subsampling: :auto)
+  def thumbnail(input:, output:, width:, height:, format: nil, quality: 85, max_pixels: nil, optimize: false, optimize_mode: :lossless, chroma_subsampling: :auto)
     maybe_sandbox(
       :thumbnail,
       kwargs: {
@@ -262,15 +301,12 @@ module SafeImage
         format: format,
         quality: quality,
         max_pixels: max_pixels,
-        backend: backend,
         optimize: optimize,
         optimize_mode: optimize_mode,
-        execution: :inline,
-        encoder: encoder,
         chroma_subsampling: chroma_subsampling
       }
     ) do
-      Processor.new(max_pixels: max_pixels, backend: backend, execution: execution, encoder: encoder, chroma_subsampling: chroma_subsampling).thumbnail(
+      Processor.new(max_pixels: resolved_max_pixels(max_pixels), chroma_subsampling: chroma_subsampling).thumbnail(
         input: input,
         output: output,
         width: width,
@@ -322,6 +358,7 @@ module SafeImage
   end
 
   def animated?(*args, **kwargs)
+    config
     path = args.first
     return false if path && File.extname(PathSafety.local_path(path)).downcase == ".svg"
 

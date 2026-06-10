@@ -17,7 +17,8 @@ module SafeImage
     SCRIPT = <<~'RUBY'
       require "safe_image"
       begin
-        # Also triggers vips_init, which installs the log handler.
+        # configure! triggers vips_init, which installs the log handler.
+        SafeImage.configure!(backend: :vips, landlock: false)
         SafeImage.probe(ARGV[0])
       rescue SafeImage::InvalidImageError
         print "rejected"

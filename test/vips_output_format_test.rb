@@ -9,7 +9,7 @@ module SafeImage
   class VipsOutputFormatTest < TestCase
     def test_no_shrink_downsize_to_another_format_reencodes
       jpg = tmp_path("converted.jpg")
-      SafeImage.downsize(PNG, jpg, "9999x9999>", backend: :vips, optimize: false, max_pixels: JPG_PIXELS)
+      SafeImage.downsize(PNG, jpg, "9999x9999>", optimize: false, max_pixels: JPG_PIXELS)
 
       assert_equal :jpeg, SafeImage.type(jpg, max_pixels: JPG_PIXELS), "PNG bytes copied to JPG output"
     end
@@ -21,7 +21,7 @@ module SafeImage
       assert_includes File.binread(marked), marker, "marker not injected"
 
       out = tmp_path("noop.png")
-      SafeImage.downsize(marked, out, "200%", backend: :vips, optimize: false, max_pixels: JPG_PIXELS)
+      SafeImage.downsize(marked, out, "200%", optimize: false, max_pixels: JPG_PIXELS)
 
       refute_includes File.binread(out), marker, "input metadata copied through"
     end

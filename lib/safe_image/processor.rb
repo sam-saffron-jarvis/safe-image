@@ -12,11 +12,8 @@ module SafeImage
     # skip the optimize pass instead of erroring.
     OPTIMIZABLE_OUTPUTS = %w[jpg png].freeze
 
-    def initialize(max_pixels: nil, backend: :auto, execution: :inline, encoder: :auto, chroma_subsampling: :auto)
-      @max_pixels = max_pixels
-      @backend = backend.to_sym
-      @execution = execution.to_sym
-      @encoder = encoder.to_sym
+    def initialize(max_pixels: nil, chroma_subsampling: :auto)
+      @max_pixels = max_pixels || SafeImage.config.max_pixels
       @chroma_subsampling = chroma_subsampling
     end
 
@@ -53,50 +50,17 @@ module SafeImage
         raise UnsupportedFormatError, "unsupported output format: #{out_format.inspect}"
       end
 
-      if @execution == :sandbox || @execution == :sandbox_if_available
-        if @execution == :sandbox && !Sandbox.available?
-          raise Error, "sandbox execution requested but Landlock::SafeExec is unavailable"
-        end
-
-        info = Sandbox.thumbnail(
-          input: input.to_s,
-          output: output.to_s,
-          width: width,
-          height: height,
-          format: out_format,
-          quality: quality,
-          max_pixels: @max_pixels,
-          backend: @backend,
-          optimize: optimize,
-          optimize_mode: optimize_mode
-        )
-        if info
-          return Result.new(
-            input: input.to_s,
-            output: output.to_s,
-            input_format: info.fetch(:input_format),
-            output_format: info.fetch(:output_format),
-            width: info.fetch(:width),
-            height: info.fetch(:height),
-            filesize: File.size(output),
-            backend: "sandboxed-#{info.fetch(:backend)}",
-            duration_ms: info.fetch(:duration_ms),
-            optimizer: info[:optimizer]
-          )
-        end
-      end
-
       output.dirname.mkpath
-      backend = resolved_backend
+      backend = SafeImage.config.backend
       info =
         if out_format == "jpg" && use_jpegli_for_generated_jpeg?(backend)
-          jpegli_thumbnail(input: input, output: output, width: width, height: height, quality: quality, source_format: input.extname.delete_prefix(".").downcase, backend: backend)
+          jpegli_thumbnail(input: input, output: output, width: width, height: height, quality: quality, source_format: input.extname.delete_prefix(".").downcase)
         else
           case backend
           when :vips
             Native.thumbnail(input.to_s, output.to_s, width, height, out_format, quality, @max_pixels)
-          when :imagemagick, :magick
-            probe_info = VipsGlue.available? ? Native.probe(input.to_s) : ImageMagickBackend.probe(input.to_s)
+          when :imagemagick
+            probe_info = ImageMagickBackend.probe(input.to_s)
             validate_pixels!(probe_info.fetch(:width), probe_info.fetch(:height))
             ImageMagickBackend.thumbnail(
               input: input.to_s,
@@ -106,8 +70,6 @@ module SafeImage
               format: out_format,
               quality: quality
             )
-          else
-            raise ArgumentError, "unknown backend: #{backend.inspect}"
           end
         end
 
@@ -132,36 +94,14 @@ module SafeImage
 
     private
 
-    # :auto prefers the native path and routes to ImageMagick only when
-    # libvips itself is unavailable; explicit :vips stays fail-closed.
-    def resolved_backend
-      case @backend
-      when :auto
-        VipsGlue.available? ? :vips : :imagemagick
-      when :vips, :imagemagick, :magick
-        @backend
-      else
-        raise ArgumentError, "unknown backend: #{@backend.inspect}"
-      end
-    end
-
+    # cjpegli is an output-quality tool, not a configuration choice: installed
+    # means used. It encodes only pixels this gem already decoded, so it is
+    # not part of the untrusted-input surface the backend choice controls.
     def use_jpegli_for_generated_jpeg?(backend)
-      case @encoder
-      when :auto
-        backend == :vips && JpegliBackend.available?
-      when :cjpegli
-        true
-      when :vips, :imagemagick, :magick
-        false
-      else
-        raise ArgumentError, "unknown encoder: #{@encoder.inspect}"
-      end
+      backend == :vips && JpegliBackend.available?
     end
 
-    def jpegli_thumbnail(input:, output:, width:, height:, quality:, source_format:, backend:)
-      raise UnsupportedFormatError, "cjpegli is not installed" unless JpegliBackend.available?
-      raise ArgumentError, "encoder: :cjpegli currently requires backend: :vips" unless backend == :vips
-
+    def jpegli_thumbnail(input:, output:, width:, height:, quality:, source_format:)
       output.dirname.mkpath
       Tempfile.create([output.basename(".*").to_s, ".safe-image.png"], output.dirname.to_s) do |tmp|
         tmp_path = Pathname.new(tmp.path)

@@ -9,6 +9,11 @@ module SafeImage
   class ImageMagickParityTest < TestCase
     PROFILE = File.expand_path("../lib/safe_image/RT_sRGB.icm", __dir__)
 
+    def setup
+      super
+      configure_safe_image(backend: :imagemagick)
+    end
+
     def test_resize_matches_reference_pipeline
       expected = tmp_path("reference.jpg")
       reference_convert(
@@ -18,7 +23,7 @@ module SafeImage
       )
 
       actual = tmp_path("actual.jpg")
-      SafeImage.resize(JPG, actual, 600, 400, backend: :imagemagick, optimize: false)
+      SafeImage.resize(JPG, actual, 600, 400, optimize: false)
 
       assert_pixel_identical expected, actual
     end
@@ -32,7 +37,7 @@ module SafeImage
       )
 
       actual = tmp_path("actual.jpg")
-      SafeImage.crop(JPG, actual, 400, 400, backend: :imagemagick, optimize: false)
+      SafeImage.crop(JPG, actual, 400, 400, optimize: false)
 
       assert_pixel_identical expected, actual
     end
@@ -45,7 +50,7 @@ module SafeImage
       )
 
       actual = tmp_path("actual.png")
-      SafeImage.downsize(PNG, actual, "50%", backend: :imagemagick, optimize: false)
+      SafeImage.downsize(PNG, actual, "50%", optimize: false)
 
       assert_pixel_identical expected, actual
     end

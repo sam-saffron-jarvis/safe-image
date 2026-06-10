@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-10
+
+The host's whole image-processing posture is now decided in one place, once,
+at boot. There is no per-call backend fidelity and no automatic routing
+between backends.
+
+### Added
+
+- **`SafeImage.configure!(backend:, landlock:, max_pixels:)` is mandatory**:
+  every operation before it raises the new `SafeImage::NotConfiguredError`.
+  `backend:` (`:vips` or `:imagemagick`) picks the decoder for all untrusted
+  bytes; `landlock:` decides sandboxing; `max_pixels:` sets the default
+  decompression-bomb ceiling (128MP, still overridable per call). Validation
+  is eager — a missing libvips, ImageMagick binary, or Landlock support fails
+  at boot, not on the first request. Calling `configure!` again replaces the
+  configuration atomically, so initializer reloads are safe.
+- `SafeImage.config` (frozen current configuration) and
+  `SafeImage.configured?`.
+
+### Changed
+
+- **Backend selection is strict.** `:auto` is gone; nothing ever falls back
+  from libvips to ImageMagick. A format the configured backend cannot decode
+  (e.g. ICO transform input on `:vips`, HEIC on a libvips build without
+  libheif) raises `UnsupportedFormatError`. Pure-Ruby format handling (SVG
+  metadata/sanitising, ICO metadata) still works on either backend.
+- **cjpegli is availability-driven**, like the optimizer tools: installed
+  means used for JPEG output on the `:vips` backend, absent means libvips
+  encodes. It is no longer a per-call or configuration choice.
+- Sandbox worker processes inherit the parent's backend and pixel-ceiling
+  configuration through the request payload (landlock is forced off inside
+  the worker, so sandboxed operations never nest).
+- `dominant_color` on the `:imagemagick` backend now decodes ICO through
+  ImageMagick; the pure-Ruby ICO decoder serves the `:vips` backend.
+
+### Removed
+
+- Per-call `backend:` keyword on `resize`, `crop`, `downsize`, `convert`,
+  `thumbnail`, `letter_avatar`, `fix_orientation` and `dominant_color`.
+- Per-call `encoder:` keyword on `convert`, `convert_to_jpeg`, `thumbnail`,
+  `resize`, `crop` and `downsize`.
+- `execution:` keyword on `thumbnail` (`:sandbox` / `:sandbox_if_available`)
+  — sandboxing is decided by `configure!(landlock:)`.
+- `SafeImage.enable_sandbox!`, `SafeImage.disable_sandbox!`,
+  `SafeImage.sandbox_enabled?` and `SafeImage.sandbox_call` —
+  `SafeImage.sandbox_available?` remains as the pre-configuration probe.
+
 ## [0.1.1] - 2026-06-10
 
 ### Added

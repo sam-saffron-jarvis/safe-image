@@ -4,11 +4,20 @@ Safe Image is a small Ruby image-processing boundary for untrusted uploads.
 
 It gives an application one narrow API for probing, thumbnailing, resizing,
 cropping, converting, optimising, SVG sanitising, animation checks, dominant
-colour extraction, favicon conversion, and letter-avatar generation. The default fast path uses a tiny
-Fiddle binding that drives `libvips` directly — pure Ruby, nothing compiles
-at install time. Compatibility paths use
-ImageMagick, but with shell-free command execution and a restrictive bundled
-policy.
+colour extraction, favicon conversion, and letter-avatar generation.
+Everything that varies by host is decided once, at boot, with a single
+mandatory call:
+
+```ruby
+SafeImage.configure!(backend: :vips, landlock: true)
+```
+
+The `:vips` backend uses a tiny Fiddle binding that drives `libvips` directly
+— pure Ruby, nothing compiles at install time. The `:imagemagick` backend
+runs ImageMagick with shell-free command execution and a restrictive bundled
+policy. There are no per-call backend choices and no silent fallback from one
+backend to the other: you pick the decoder for untrusted bytes in one place
+and every operation uses it.
 
 Safe Image started as a Discourse extraction: the public surface intentionally
 covers the image operations Discourse performs today. The useful part is more
@@ -21,6 +30,9 @@ Safe Image is not magic pixie dust. It is a deliberately small choke point.
 
 What it does:
 
+- forces one explicit, eagerly validated `configure!` decision — which backend
+  decodes untrusted bytes, whether the Landlock sandbox is on — before any
+  operation runs; everything else raises `NotConfiguredError`
 - uses explicit argv arrays for external commands, never shell strings
 - starts external commands with an allowlisted environment, private temp/home/cache
   directories, bounded stdout/stderr, and process-group timeout cleanup
@@ -45,25 +57,20 @@ What it does:
   - delegates, filters, and `@file` indirection
 - supports optional Landlock subprocess sandboxing on Linux
 
-The ImageMagick backend is explicit. Safe Image will not silently fall from the
-libvips path into generic ImageMagick decoding.
+The backend is a configuration decision, not a per-call option. Safe Image
+will never silently fall from the libvips path into generic ImageMagick
+decoding — a format the configured backend cannot decode fails closed with
+`SafeImage::UnsupportedFormatError`.
 
 ## Install
 
 Nothing compiles at install time: libvips is bound at runtime through Fiddle
-(`libvips.so.42` is dlopened on first use; `SAFE_IMAGE_LIBVIPS` overrides the
-library name authoritatively). libvips' GLib warnings about rejected input
-(e.g. "Not a PNG file") are silenced — failures surface as exceptions
-instead; set `SAFE_IMAGE_VIPS_WARNINGS=1` to restore them for debugging. Install the runtime
-[dependencies](#dependencies) below; to fail fast at boot rather than on the
-first image operation, call `SafeImage::VipsGlue.init!` during startup.
-
-libvips is strongly recommended but not mandatory: on a host with only
-ImageMagick, every `backend: :auto` operation routes through the ImageMagick
-compatibility paths and the pure-Ruby paths (SVG, ICO metadata) are
-unaffected. Explicit `backend: :vips` calls fail closed with
-`SafeImage::VipsUnavailableError`, and `SafeImage::VipsGlue.available?`
-reports the state.
+(`libvips.so.42` is dlopened when `configure!(backend: :vips)` runs;
+`SAFE_IMAGE_LIBVIPS` overrides the library name authoritatively). libvips'
+GLib warnings about rejected input (e.g. "Not a PNG file") are silenced —
+failures surface as exceptions instead; set `SAFE_IMAGE_VIPS_WARNINGS=1` to
+restore them for debugging. Install the runtime
+[dependencies](#dependencies) below.
 
 ```bash
 gem build safe_image.gemspec
@@ -72,6 +79,8 @@ gem install ./safe_image-0.1.0.gem
 
 ```ruby
 require "safe_image"
+
+SafeImage.configure!(backend: :vips, landlock: false)
 
 result = SafeImage.thumbnail(
   input: "upload.jpg",
@@ -91,6 +100,51 @@ SafeImage.convert(
   max_pixels: 40_000_000
 )
 ```
+
+## Configuration
+
+`SafeImage.configure!` must be called before any operation — typically from a
+boot-time initializer. Any operation before it (including the pure-Ruby SVG
+and remote helpers) raises `SafeImage::NotConfiguredError`.
+
+```ruby
+SafeImage.configure!(
+  backend: :vips,    # required: :vips or :imagemagick — decodes all untrusted bytes
+  landlock: true,    # required: route every operation through the Landlock sandbox
+  max_pixels: SafeImage::DEFAULT_MAX_PIXELS # optional: default decompression-bomb ceiling (128MP)
+)
+```
+
+Validation is eager, so a misconfigured host fails at boot rather than on the
+first request:
+
+- `backend: :vips` dlopens libvips and raises if it is unavailable
+- `backend: :imagemagick` raises if no `magick`/`convert` executable is found
+- `landlock: true` raises if the Landlock sandbox is unavailable
+  (`SafeImage.sandbox_available?` works before `configure!`, so a host can
+  probe first)
+- unknown values raise `ArgumentError`
+
+Calling `configure!` again replaces the configuration atomically (last call
+wins), so reloading initializers in development is safe. `SafeImage.config`
+returns the current frozen configuration and `SafeImage.configured?` reports
+whether one is set.
+
+Per-call `max_pixels:` still overrides the configured ceiling for an
+individual operation; everything else about backend selection and sandboxing
+is decided here and only here.
+
+Choosing a backend:
+
+- `:vips` — the recommended fast path: explicit native loaders, in-process
+  hardening, no subprocess per operation
+- `:imagemagick` — the compatibility path matching Discourse's historical
+  `convert` pipelines; also the option for hosts without libvips. Formats are
+  decoded by ImageMagick under the bundled restrictive policy.
+
+A format the configured backend cannot decode fails closed — e.g. ICO
+transform inputs need `:imagemagick` (ICO *metadata* is parsed in pure Ruby on
+either backend), and HEIC needs a libvips build with libheif on `:vips`.
 
 ## Dependencies
 
@@ -121,14 +175,14 @@ sudo pacman -S --needed libvips \
 
 | Dependency | Kind | Needed for | Without it |
 | --- | --- | --- | --- |
-| `libvips` runtime library (`libvips.so.42`; Debian: `libvips42` ≥ 8.13) | strongly recommended | the fast path for every operation, bound via Fiddle at first use | `backend: :auto` routes everything through ImageMagick instead; explicit `backend: :vips` raises `VipsUnavailableError` |
-| ImageMagick (`magick`/`convert`, `identify`) | optional | the explicit `backend: :imagemagick` opt-in paths, and ICO-input routing for the transform operations | ICO transforms and explicit `:imagemagick` calls raise; everything else runs natively |
+| `libvips` runtime library (`libvips.so.42`; Debian: `libvips42` ≥ 8.13) | required for `backend: :vips` | the fast path for every operation, bound via Fiddle | `configure!(backend: :vips)` raises at boot; configure `backend: :imagemagick` instead |
+| ImageMagick (`magick`/`convert`, `identify`) | required for `backend: :imagemagick` | every operation on the `:imagemagick` backend | `configure!(backend: :imagemagick)` raises at boot |
 | `jpegoptim` | required for JPEG `optimize` | lossless JPEG optimisation and metadata stripping | JPEG `optimize` raises in strict mode |
 | `oxipng` | required for PNG `optimize` | lossless PNG optimisation | PNG `optimize` raises in strict mode |
 | `pngquant` | optional | lossy PNG quantisation (`optimize_mode: :lossy`, files < 500KB) | lossy mode silently skips the quantisation pass |
 | `jpegtran` (libjpeg-turbo) | optional | lossless tier of `fix_orientation` for MCU-aligned JPEGs | falls back to the libvips re-encode tier |
-| `cjpegli` (libjxl) | optional | higher-quality encoding of generated JPEGs (`encoder: :auto`) | falls back to libvips/ImageMagick JPEG encoders |
-| `landlock` gem (Linux kernel ≥ 5.13) | optional, opt-in | the atomic sandbox (`SafeImage.enable_sandbox!`) | `sandbox_available?` is false; inline execution only |
+| `cjpegli` (libjxl) | optional | higher-quality encoding of generated JPEGs on the `:vips` backend — used automatically when installed | generated JPEGs use the backend's own encoder |
+| `landlock` gem (Linux kernel ≥ 5.13) | required for `landlock: true` | the atomic sandbox around every operation | `configure!(landlock: true)` raises at boot; `sandbox_available?` is false |
 | `rexml` gem | automatic | SVG sanitising and SVG metadata | installed as a gem dependency |
 
 The `landlock` gem is intentionally **not** a gem dependency; add it to the
@@ -140,8 +194,9 @@ Some features depend on how the host's libvips was built (all present in
 stock Debian, Ubuntu and Arch packages):
 
 - **libheif** — HEIC/AVIF decode (`probe`, `convert`, thumbnails)
-- **Pango text** (`VipsText`) — native `letter_avatar`; without it the
-  operation falls back to ImageMagick
+- **Pango text** (`VipsText`) — `letter_avatar`; without it the operation
+  raises `UnsupportedFormatError` (configure `backend: :imagemagick` if you
+  need letter avatars on such a build)
 - **cgif** (`gifsave`) — GIF *output* from the vips backend; GIF *decode*
   (libnsgif) is always built in
 - **libjxl** (`jxlload`/`jxlsave`) — JPEG XL decode and encode
@@ -164,13 +219,16 @@ back per-glyph to whatever system fonts exist.
 
 ### Checking a host
 
+These probes work before `configure!`, so an application can inspect the host
+and then make its configuration decision:
+
 ```ruby
 require "safe_image"
 
 %w[magick identify jpegoptim oxipng pngquant jpegtran cjpegli].each do |tool|
   puts format("%-10s %s", tool, SafeImage::Runner.available?(tool) ? "ok" : "missing")
 end
-puts format("%-10s %s", "libvips", SafeImage::VipsGlue.available? ? "ok" : "unavailable (ImageMagick fallback)")
+puts format("%-10s %s", "libvips", SafeImage::VipsGlue.available? ? "ok" : "unavailable")
 puts format("%-10s %s", "sandbox", SafeImage.sandbox_available? ? "ok" : "unavailable")
 ```
 
@@ -188,7 +246,7 @@ SafeImage::Result[
   height:,
   filesize:,
   backend:,        # e.g. "libvips-direct", "imagemagick", "cjpegli",
-                   #      "libvips-direct+cjpegli", or "sandboxed-..."
+                   #      "libvips-direct+cjpegli"
   duration_ms:,
   optimizer:       # optimizer tool list for thumbnail path, otherwise nil
 ]
@@ -210,9 +268,9 @@ Optimizer operations return a hash:
 
 ### `SafeImage.probe(path, max_pixels: nil)`
 
-Reads image metadata through the direct libvips backend.
+Reads image metadata through the configured backend.
 
-Supported inputs:
+Supported inputs on the `:vips` backend:
 
 - `jpg` / `jpeg`
 - `png`
@@ -221,7 +279,8 @@ Supported inputs:
 - `heic` / `heif`
 - `avif`
 - `jxl` (requires a libvips build with libjxl support)
-- `ico` (pure-Ruby directory parse; reports the largest entry's dimensions)
+- `ico` (pure-Ruby directory parse on either backend; reports the largest
+  entry's dimensions)
 
 ```ruby
 info = SafeImage.probe("upload.jpg", max_pixels: 40_000_000)
@@ -242,17 +301,14 @@ result = SafeImage.thumbnail(
   height: 400,
   format: nil,              # inferred from output extension when nil
   quality: 85,
-  max_pixels: 40_000_000,
-  backend: :auto,           # :auto (vips, or ImageMagick when vips is absent), :vips, :imagemagick
+  max_pixels: 40_000_000,   # overrides the configured ceiling for this call
   optimize: true,
   optimize_mode: :lossless, # :lossless or :lossy for PNG optimisation
-  execution: :inline,       # :inline, :sandbox, :sandbox_if_available
-  encoder: :auto,           # :auto, :cjpegli, :vips, :imagemagick for JPEG output
-  chroma_subsampling: :auto # :auto, "420", "422", "444"
+  chroma_subsampling: :auto # :auto, "420", "422", "444" for JPEG output
 )
 ```
 
-Supported outputs for the direct libvips backend:
+Supported outputs on the `:vips` backend:
 
 - `jpg` / `jpeg`
 - `png`
@@ -261,29 +317,24 @@ Supported outputs for the direct libvips backend:
 - `avif`
 - `jxl` (requires a libvips build with libjxl support)
 
-`execution: :sandbox` is fail-closed: it raises if Landlock is unavailable.
-`execution: :sandbox_if_available` uses the sandbox only when available.
-
-## JPEG encoder selection
+## JPEG encoding of generated images
 
 Safe Image separates **encoding generated JPEGs** from **optimising existing
 JPEGs**. This avoids hiding a lossy re-encode behind a method named `optimize`.
 
-| Operation | `encoder: :auto` behavior |
+Like the optimizer tools, the optional `cjpegli` encoder is availability
+driven: installed means used, absent means the configured backend encodes.
+There is no encoder knob — cjpegli only ever encodes pixels Safe Image has
+already decoded, so it is not part of the untrusted-input surface the backend
+choice controls.
+
+| Operation | Behavior |
 | --- | --- |
-| `thumbnail` / `resize` / `crop` / `downsize` to JPEG with `backend: :vips` | use `cjpegli` when installed; otherwise use normal libvips JPEG output |
-| `convert("input.png", "output.jpg", format: "jpg")` | use `cjpegli` when installed; otherwise use ImageMagick compatibility path |
+| `thumbnail` / `resize` / `crop` / `downsize` to JPEG on the `:vips` backend | use `cjpegli` when installed; otherwise normal libvips JPEG output |
+| `convert("input.png", "output.jpg", format: "jpg")` on the `:vips` backend | use `cjpegli` when installed (PNG is the one input Jpegli encodes directly); otherwise libvips |
 | `convert` from HEIC/WebP/AVIF/GIF/JPEG to JPEG | decode through the native libvips loaders and encode with libvips; `cjpegli` is not treated as a universal decoder |
-| `optimize("existing.jpg")` | use `jpegoptim`; never use `cjpegli` by default |
-
-Encoder controls:
-
-| Option | Meaning |
-| --- | --- |
-| `encoder: :auto` | best available default with safe fallback |
-| `encoder: :cjpegli` | require Jpegli and fail closed if unavailable/unsupported |
-| `encoder: :vips` | force normal libvips JPEG output where available |
-| `encoder: :imagemagick` | force ImageMagick compatibility output |
+| any operation on the `:imagemagick` backend | ImageMagick encodes; `cjpegli` is never used |
+| `optimize("existing.jpg")` | use `jpegoptim`; never `cjpegli` |
 
 `cjpegli` output is ordinary browser-compatible JPEG. It is optional because it
 is a system binary, not a Ruby dependency. Safe Image detects it at runtime.
@@ -327,11 +378,11 @@ root, and derives dimensions from numeric `width`/`height` or `viewBox`.
 
 ### `SafeImage.orientation(path, max_pixels: nil)`
 
-Returns the EXIF orientation integer (1-8) for a local file from the
-orientation header field the native libvips loaders populate during the
-header scan — no pixel data is decoded, and garbage tag values clamp to `1`.
-SVG and ICO report `1` by definition; ImageMagick identify remains only as
-the fallback for formats outside the native loader allowlist.
+Returns the EXIF orientation integer (1-8) for a local file. On the `:vips`
+backend it is read from the orientation header field the native loaders
+populate during the header scan — no pixel data is decoded — and garbage tag
+values clamp to `1`. On the `:imagemagick` backend it comes from `identify`.
+SVG and ICO report `1` by definition.
 
 Note one deliberate HEIC difference: libheif applies the container's
 `irot`/`imir` transforms during decode, so the native path reports the
@@ -457,10 +508,10 @@ SafeImage.fetch_remote("https://example.com/image.jpg", max_bytes: 10.megabytes)
 end
 ```
 
-When global Landlock is enabled, the network fetch itself is not put inside the
-Landlock worker because the worker denies network access. The downloaded tempfile
-is then passed through the normal Safe Image local image APIs, so decoding still
-uses the same sandboxed image-processing path.
+With `landlock: true` configured, the network fetch itself is not put inside
+the Landlock worker because the worker denies network access. The downloaded
+tempfile is then passed through the normal Safe Image local image APIs, so
+decoding still uses the same sandboxed image-processing path.
 
 ## Compatibility API
 
@@ -468,90 +519,83 @@ These methods are shaped around the image operations Discourse currently
 performs. They are useful outside Discourse too, but the names are deliberately
 boring because they map to common upload-pipeline tasks.
 
-### `SafeImage.resize(from, to, width, height, quality: nil, backend: :auto, optimize: true, max_pixels: nil, encoder: :auto, chroma_subsampling: :auto)`
+### `SafeImage.resize(from, to, width, height, quality: nil, optimize: true, max_pixels: nil, chroma_subsampling: :auto)`
 
 Creates a resized thumbnail-style output.
 
 ```ruby
 SafeImage.resize("upload.jpg", "thumb.jpg", 600, 400)
-SafeImage.resize("upload.jpg", "thumb.jpg", 600, 400, backend: :imagemagick, quality: 85)
+SafeImage.resize("upload.jpg", "thumb.jpg", 600, 400, quality: 85)
 ```
 
-Backends (shared by `resize`, `crop` and `downsize`):
+`resize`, `crop` and `downsize` run on the configured backend:
 
-- `:auto` (default) — direct libvips path; only formats outside the native
-  loader allowlist (ICO) fall back to the ImageMagick compatibility path
-- `:vips` — direct libvips path, fail-closed
+- `:vips` — the direct libvips path; formats outside the native loader
+  allowlist (ICO input) fail closed
 - `:imagemagick` — the compatibility path matching Discourse's historical
   `convert` pipelines (`-thumbnail`, catrom interpolation, unsharp, sRGB
-  profile); pin this if byte-similar output with existing thumbnails matters
+  profile); configure this if byte-similar output with existing thumbnails
+  matters
 
-### `SafeImage.crop(from, to, width, height, quality: nil, backend: :auto, optimize: true, max_pixels: nil, encoder: :auto, chroma_subsampling: :auto)`
+### `SafeImage.crop(from, to, width, height, quality: nil, optimize: true, max_pixels: nil, chroma_subsampling: :auto)`
 
 Creates a north-cropped image. This matches the avatar/optimized-image crop
 shape used by Discourse.
 
 ```ruby
 SafeImage.crop("upload.jpg", "avatar.jpg", 240, 240)
-SafeImage.crop("upload.jpg", "avatar.jpg", 240, 240, backend: :imagemagick)
 ```
 
-### `SafeImage.downsize(from, to, dimensions, backend: :auto, optimize: true, max_pixels: nil, quality: 85, encoder: :auto, chroma_subsampling: :auto)`
+### `SafeImage.downsize(from, to, dimensions, optimize: true, max_pixels: nil, quality: 85, chroma_subsampling: :auto)`
 
 Downsizes an image using ImageMagick-style geometry strings.
 
 ```ruby
 SafeImage.downsize("large.png", "small.png", "50%")
 SafeImage.downsize("large.png", "small.png", "100x100>")
-SafeImage.downsize("large.png", "small.png", "400000@", backend: :imagemagick)
+SafeImage.downsize("large.png", "small.png", "400000@")
 ```
 
-The direct vips backend supports the geometry forms covered by the test suite:
+The vips backend supports the geometry forms covered by the test suite:
 percentage, bounding box with `>`, and pixel-area cap with `@`.
 
-### `SafeImage.convert(from, to, format:, quality: nil, optimize: true, max_pixels: nil, encoder: :auto, chroma_subsampling: :auto, backend: :auto)`
+### `SafeImage.convert(from, to, format:, quality: nil, optimize: true, max_pixels: nil, chroma_subsampling: :auto)`
 
 Converts an input image to an explicit output `format:`. Unsupported formats
 raise `SafeImage::UnsupportedFormatError`.
 
-The default `backend: :auto` decodes through the native libvips loaders,
+On the `:vips` backend this decodes through the native libvips loaders,
 auto-orients, flattens transparency onto white for JPEG targets (matching the
 ImageMagick path's `-background white -flatten`), and re-encodes. When no
 `quality:` is given, native JPEG output uses quality 92 — what ImageMagick
 uses for sources without quality tables — rather than libvips' default 75.
-Only format routing libvips cannot serve (ICO input, ICO output) falls back
-to the ImageMagick compatibility backend; `backend: :vips` makes that
-fail-closed, and `backend: :imagemagick` forces the compatibility path.
+ICO input/output is outside the native loaders and fails closed (use
+`convert_favicon_to_png` for favicons, or the `:imagemagick` backend).
 
-For JPEG output, `encoder: :auto` uses `cjpegli` when it is installed and the
-input can be encoded directly by Jpegli (intentionally limited to PNG input).
-Use `encoder: :cjpegli` to require Jpegli and fail closed, `encoder: :vips`
-to force the libvips encoder, or `encoder: :imagemagick` (legacy alias for
-`backend: :imagemagick`) to force the compatibility path.
+For PNG-to-JPEG on the `:vips` backend, `cjpegli` is used automatically when
+installed (see [JPEG encoding of generated images](#jpeg-encoding-of-generated-images)).
 
 ```ruby
 SafeImage.convert("upload.png", "upload.jpg", format: "jpg", quality: 85)
-SafeImage.convert("upload.png", "upload.jpg", format: "jpg", quality: 85, encoder: :cjpegli)
 SafeImage.convert("upload.heic", "upload.jpg", format: "jpg", quality: 85)
 SafeImage.convert("upload.jpg", "upload.webp", format: "webp", quality: 85)
 ```
 
-### `SafeImage.fix_orientation(from, to = from, max_pixels: nil, quality: nil, backend: :auto)`
+### `SafeImage.fix_orientation(from, to = from, max_pixels: nil, quality: nil)`
 
-Bakes the EXIF orientation into the pixels and clears the tag. The `:auto`
+Bakes the EXIF orientation into the pixels and clears the tag. The `:vips`
 backend tries tiers in order:
 
 1. **jpegtran (lossless)** — for JPEGs with `jpegtran` installed, the
    transform happens on the DCT coefficients with zero generation loss.
    `-perfect` refuses non-MCU-aligned dimensions, in which case:
 2. **libvips re-encode** — autorotate and re-encode, stripping metadata.
-   JPEG output uses `quality:` (default 95; note the ImageMagick path
-   re-encodes at the input's estimated quality instead).
-3. **ImageMagick** is never used implicitly here; opt in with
-   `backend: :imagemagick` for the previous `-auto-orient` behaviour.
+   JPEG output uses `quality:` (default 95).
 
-If `to` is omitted, the file is
-rewritten in place.
+The `:imagemagick` backend uses the previous `-auto-orient` behaviour and
+re-encodes at the input's estimated quality.
+
+If `to` is omitted, the file is rewritten in place.
 
 ```ruby
 SafeImage.fix_orientation("upload.jpg")
@@ -560,12 +604,14 @@ SafeImage.fix_orientation("upload.jpg", "oriented.jpg")
 
 ### `SafeImage.convert_favicon_to_png(from, to, optimize: true, max_pixels: nil)`
 
-Extracts the largest ICO entry and writes PNG, without ImageMagick: the
-container and legacy DIB payloads (1/4/8/24/32bpp BI_RGB plus the AND mask)
-are parsed in pure Ruby with explicit bounds checks, and pixels are encoded
-through the hardened native libvips path. Embedded PNG payloads are
-re-encoded — never copied through verbatim — and their pixel cap is enforced
-from the IHDR before any decoder runs.
+Extracts the largest ICO entry and writes PNG. On the `:vips` backend no
+ImageMagick is involved: the container and legacy DIB payloads (1/4/8/24/32bpp
+BI_RGB plus the AND mask) are parsed in pure Ruby with explicit bounds checks,
+and pixels are encoded through the hardened native libvips path. Embedded PNG
+payloads are re-encoded — never copied through verbatim — and their pixel cap
+is enforced from the IHDR before any decoder runs. On the `:imagemagick`
+backend the conversion runs through ImageMagick's ico decoder under the
+bundled policy.
 
 ```ruby
 SafeImage.convert_favicon_to_png("favicon.ico", "favicon.png")
@@ -573,10 +619,10 @@ SafeImage.convert_favicon_to_png("favicon.ico", "favicon.png")
 
 ### `SafeImage.frame_count(path, max_pixels: nil)`
 
-Returns the frame count from the n-pages header field via the native libvips
-loaders — no pixel data is decoded. ICO directories are counted by the
-pure-Ruby parser. ImageMagick identify remains only as the fallback for
-formats neither path knows.
+Returns the frame count. On the `:vips` backend it comes from the n-pages
+header field via the native loaders — no pixel data is decoded; on the
+`:imagemagick` backend from `identify`. ICO directories are counted by the
+pure-Ruby parser on either backend.
 
 ```ruby
 frames = SafeImage.frame_count("animated.gif")
@@ -590,38 +636,35 @@ Returns `true` when `frame_count(path) > 1`.
 SafeImage.animated?("animated.webp")
 ```
 
-### `SafeImage.dominant_color(path, max_pixels: nil, backend: :auto)`
+### `SafeImage.dominant_color(path, max_pixels: nil)`
 
 Computes the image's alpha-weighted average colour (first frame for animated
 formats) and returns it as an uppercase `RRGGBB` hex string, matching the
 value Discourse stores from `Upload#calculate_dominant_color!`.
 
-The default `:auto` backend computes the per-channel mean natively through
-libvips; ICO routes through the pure-Ruby ICO decoder, so no format needs
-ImageMagick. Pass
-`backend: :vips` to forbid ImageMagick entirely, or `backend: :imagemagick`
-for the histogram command Discourse runs today. The two backends agree to
-within a few least-significant bits per channel (ImageMagick averages through
-its resize filter rather than computing the exact mean).
+The `:vips` backend computes the exact per-channel mean natively, with ICO
+decoded by the pure-Ruby parser. The `:imagemagick` backend uses the
+histogram command Discourse runs today. The two backends agree to within a
+few least-significant bits per channel (ImageMagick averages through its
+resize filter rather than computing the exact mean).
 
 The pixel cap is enforced before the full decode on either backend,
-undecodable input raises `InvalidImageError` (never retried on the other
-backend), and SVG input raises `UnsupportedFormatError`.
+undecodable input raises `InvalidImageError`, and SVG input raises
+`UnsupportedFormatError`.
 
 ```ruby
-SafeImage.dominant_color("upload.png")                       # => "6F745E"
-SafeImage.dominant_color("upload.png", backend: :vips)       # ImageMagick-free
+SafeImage.dominant_color("upload.png") # => "6F745E"
 ```
 
-### `SafeImage.letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "DejaVu-Sans", backend: :auto)`
+### `SafeImage.letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "DejaVu-Sans")`
 
 Generates a square letter avatar PNG: one grapheme blended in white at 80%
 opacity over a solid background.
 
-The default `:auto` backend renders natively through libvips' Pango text
-support (the glyph is markup-escaped before rendering) and falls back to
-ImageMagick only when the libvips build has no text renderer. Pass
-`backend: :vips` or `backend: :imagemagick` to pin a path.
+The `:vips` backend renders natively through libvips' Pango text support (the
+glyph is markup-escaped before rendering) and fails closed on builds without
+a text renderer; the `:imagemagick` backend uses ImageMagick's annotation
+path.
 
 The default `DejaVu-Sans` font uses the DejaVu Sans file bundled with the gem
 (see `lib/safe_image/fonts/DEJAVU-LICENSE`), so rendering does not depend on
@@ -758,16 +801,16 @@ claim is defense-in-depth, not immunity.
 
 ## Atomic Landlock sandboxing
 
-Landlock support is optional, but atomic once enabled.
+Landlock support is optional, but atomic once configured.
 
 ```ruby
-SafeImage.sandbox_available? # => true/false
-SafeImage.enable_sandbox!    # raises if unavailable
-SafeImage.sandbox_enabled?   # => true
+SafeImage.sandbox_available?                       # => true/false, works before configure!
+SafeImage.configure!(backend: :vips, landlock: true) # raises if unavailable
+SafeImage.config.landlock                          # => true
 ```
 
-After `SafeImage.enable_sandbox!`, every public operation routes through the
-sandbox worker:
+With `landlock: true`, every public operation routes through the sandbox
+worker:
 
 - `probe`
 - `type`
@@ -791,13 +834,15 @@ sandbox worker:
 - `optimize_image!`
 - `sanitize_svg!`
 
-There is no silent fallback after global sandbox enablement. If sandbox setup or
+There is no silent fallback once landlock is configured. If sandbox setup or
 a sandboxed command fails, the operation fails.
 
 The sandbox grants read/write access only to the paths inferred from the
 operation arguments, plus runtime/library paths and temporary directories needed
 by Ruby, libvips, ImageMagick, and optimizer tools. Network syscalls are denied
-through the Landlock helper's seccomp layer.
+through the Landlock helper's seccomp layer. Worker processes inherit the
+parent's backend and pixel-ceiling configuration; landlock is forced off
+inside the worker so sandboxed operations never nest.
 
 ## Discourse parity
 

@@ -40,7 +40,7 @@ module SafeImage
       Dir.mktmpdir("safe-image-command-") do |tmpdir|
         child_env = command_env(tmpdir, env)
 
-        if sandbox || SafeImage.sandbox_enabled?
+        if sandbox || SafeImage.sandbox?
           return Sandbox.capture_command!(argv, read: read, write: [*write, tmpdir], timeout: timeout, env: child_env)
         end
 

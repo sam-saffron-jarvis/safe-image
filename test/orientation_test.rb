@@ -52,10 +52,11 @@ module SafeImage
       assert_equal [128, 192], SafeImage.size(path)
     end
 
-    def test_fix_orientation_imagemagick_backend_remains_available
+    def test_fix_orientation_with_the_imagemagick_backend
       path = oriented_jpg("im.jpg", 6, width: 192, height: 128)
 
-      result = SafeImage.fix_orientation(path, tmp_path("fixed.jpg"), backend: :imagemagick)
+      configure_safe_image(backend: :imagemagick)
+      result = SafeImage.fix_orientation(path, tmp_path("fixed.jpg"))
 
       assert_equal "imagemagick", result.backend
       assert_result result, width: 128, height: 192, format: "jpg"
@@ -65,10 +66,6 @@ module SafeImage
       path = oriented_jpg("q.jpg", 6, width: 201, height: 131)
 
       assert_raises(ArgumentError) { SafeImage.fix_orientation(path, tmp_path("fixed.jpg"), quality: 9000) }
-    end
-
-    def test_fix_orientation_rejects_unknown_backend
-      assert_raises(ArgumentError) { SafeImage.fix_orientation(JPG, tmp_path("fixed.jpg"), backend: :gd) }
     end
 
     private

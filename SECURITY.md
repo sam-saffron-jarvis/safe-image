@@ -18,9 +18,9 @@ Safe Image assumes image input may be attacker-controlled. The library is design
   classes blocked by name
 - a runtime libvips binding (Fiddle) that exposes only the specific
   operations the gem invokes — there is no generic operation access
-- no silent fallback from libvips to generic ImageMagick decoding; backend
-  selection is explicit, and capability fallback happens only on the
-  documented `:auto` routes
+- no silent fallback from libvips to generic ImageMagick decoding; the
+  backend is a single explicit `SafeImage.configure!` decision and formats it
+  cannot decode fail closed
 - decompression-bomb ceilings enforced from container/header metadata before
   any pixel decode (128MP default, plus dedicated SVG and ICO caps)
 - restrictive ImageMagick policy disabling delegates, filters, `@file`, remote URL coders, Ghostscript-backed formats, and dangerous pseudo-formats
@@ -50,7 +50,7 @@ The honest claim is defense-in-depth:
 - without Landlock: centralized and hardened image processing with major delegate/protocol/policy foot-guns removed
 - with Landlock: the same hardening plus a kernel containment boundary around subprocess-based public operations
 
-If your deployment needs a hard isolation boundary, enable sandbox execution and run image processing away from your main web worker process.
+If your deployment needs a hard isolation boundary, configure `landlock: true` and run image processing away from your main web worker process.
 
 ## Reporting vulnerabilities
 

@@ -4,7 +4,7 @@ require "fileutils"
 require_relative "test_helper"
 
 module SafeImage
-  # Runs the whole public API with the Landlock sandbox enabled to prove
+  # Runs the whole public API with the Landlock sandbox configured to prove
   # every operation works through atomic sandboxed child processes. Sandbox
   # results cross a process boundary, so hashes may come back with string
   # keys where the inline path uses symbols.
@@ -12,16 +12,12 @@ module SafeImage
     def setup
       super
       skip "Landlock::SafeExec unavailable" unless SafeImage.sandbox_available?
-      SafeImage.enable_sandbox!
+      configure_safe_image(landlock: true)
     end
 
-    def teardown
-      SafeImage.disable_sandbox!
-      super
-    end
-
-    def test_sandbox_reports_enabled
-      assert_predicate SafeImage, :sandbox_enabled?
+    def test_sandbox_reports_configured
+      assert SafeImage.config.landlock
+      assert_predicate SafeImage, :sandbox?
     end
 
     def test_metadata_helpers
@@ -51,18 +47,20 @@ module SafeImage
     end
 
     def test_crop_with_both_backends
-      vips = SafeImage.crop(JPG, tmp_path("crop-vips.jpg"), 400, 400, backend: :vips, optimize: true, max_pixels: JPG_PIXELS)
+      vips = SafeImage.crop(JPG, tmp_path("crop-vips.jpg"), 400, 400, optimize: true, max_pixels: JPG_PIXELS)
       assert_result vips, width: 400, height: 400
 
-      im = SafeImage.crop(JPG, tmp_path("crop-im.jpg"), 400, 400, backend: :imagemagick, optimize: true, max_pixels: JPG_PIXELS)
+      configure_safe_image(backend: :imagemagick, landlock: true)
+      im = SafeImage.crop(JPG, tmp_path("crop-im.jpg"), 400, 400, optimize: true, max_pixels: JPG_PIXELS)
       assert_result im, width: 400, height: 400
     end
 
     def test_downsize_with_both_backends
-      vips = SafeImage.downsize(PNG, tmp_path("down-vips.png"), "50%", backend: :vips, max_pixels: PNG_PIXELS)
+      vips = SafeImage.downsize(PNG, tmp_path("down-vips.png"), "50%", max_pixels: PNG_PIXELS)
       assert_result vips, width: 1016, height: 656
 
-      im = SafeImage.downsize(PNG, tmp_path("down-im.png"), "50%", backend: :imagemagick, max_pixels: PNG_PIXELS)
+      configure_safe_image(backend: :imagemagick, landlock: true)
+      im = SafeImage.downsize(PNG, tmp_path("down-im.png"), "50%", max_pixels: PNG_PIXELS)
       assert_result im, width: 1016, height: 656
     end
 

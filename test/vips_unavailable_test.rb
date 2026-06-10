@@ -6,10 +6,11 @@ require_relative "test_helper"
 
 module SafeImage
   # The libvips binding loads at runtime, so a host with only ImageMagick
-  # must keep working: :auto backends route to ImageMagick, pure-Ruby paths
-  # (SVG, ICO metadata) are unaffected, and only explicit backend: :vips
-  # calls fail closed. Exercised in a subprocess with the library override
-  # pointed at a name that cannot resolve.
+  # must keep working when configured with backend: :imagemagick — and
+  # configure!(backend: :vips) must fail closed at boot, not on the first
+  # request. Pure-Ruby paths (SVG, ICO metadata) never depend on libvips.
+  # Exercised in a subprocess with the library override pointed at a name
+  # that cannot resolve.
   class VipsUnavailableTest < TestCase
     SCRIPT = <<~'RUBY'
       require "safe_image"
@@ -17,6 +18,22 @@ module SafeImage
 
       out = {}
       out[:available] = SafeImage::VipsGlue.available?
+
+      begin
+        SafeImage.configure!(backend: :vips, landlock: false)
+        out[:vips_configure] = "no error"
+      rescue SafeImage::Error
+        out[:vips_configure] = "raised"
+      end
+
+      begin
+        SafeImage.probe(ENV["JPG"])
+        out[:unconfigured] = "no error"
+      rescue SafeImage::NotConfiguredError
+        out[:unconfigured] = "raised"
+      end
+
+      SafeImage.configure!(backend: :imagemagick, landlock: false)
       out[:probe_jpg] = SafeImage.probe(ENV["JPG"], max_pixels: 100_000_000).backend
       out[:probe_ico] = SafeImage.probe(ENV["ICO"]).backend
       out[:thumb] = SafeImage.thumbnail(input: ENV["JPG"], output: File.join(ENV["OUT"], "t.jpg"), width: 60, height: 40, max_pixels: 100_000_000).backend
@@ -28,17 +45,11 @@ module SafeImage
       out[:favicon] = SafeImage.convert_favicon_to_png(ENV["ICO"], File.join(ENV["OUT"], "f.png")).backend
       out[:frames] = SafeImage.frame_count(ENV["GIF"], max_pixels: 10_000_000)
       out[:orientation] = SafeImage.orientation(ENV["JPG"])
-      begin
-        SafeImage.thumbnail(input: ENV["JPG"], output: File.join(ENV["OUT"], "x.jpg"), width: 10, height: 10, backend: :vips, max_pixels: 100_000_000)
-        out[:vips_pin] = "no error"
-      rescue SafeImage::VipsUnavailableError
-        out[:vips_pin] = "raised"
-      end
 
       puts JSON.dump(out)
     RUBY
 
-    def test_gracefully_degrades_to_imagemagick_without_libvips
+    def test_imagemagick_backend_works_without_libvips
       env = {
         "SAFE_IMAGE_LIBVIPS" => "libsafe-image-no-such-library.so.0",
         "JPG" => JPG, "PNG" => PNG, "GIF" => GIF, "ICO" => ICO, "OUT" => tmpdir
@@ -49,6 +60,8 @@ module SafeImage
       out = JSON.parse(stdout.lines.last)
 
       assert_equal false, out["available"]
+      assert_equal "raised", out["vips_configure"], "configure!(backend: :vips) must fail closed at boot"
+      assert_equal "raised", out["unconfigured"], "operations before configure! must raise"
       assert_equal "imagemagick", out["probe_jpg"]
       assert_equal "ico-metadata", out["probe_ico"], "pure-Ruby paths must not depend on libvips"
       assert_equal "imagemagick", out["thumb"]
@@ -60,7 +73,6 @@ module SafeImage
       assert_equal "imagemagick", out["favicon"]
       assert_equal 20, out["frames"]
       assert_equal 1, out["orientation"]
-      assert_equal "raised", out["vips_pin"], "explicit backend: :vips must fail closed"
     end
   end
 end

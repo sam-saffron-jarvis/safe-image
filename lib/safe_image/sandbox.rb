@@ -65,20 +65,21 @@ module SafeImage
       operation == "type" && result ? result.to_sym : result
     end
 
-    def thumbnail(request)
-      public_call!(
-        :thumbnail,
-        args: [],
-        kwargs: request.merge(execution: :inline)
-      )
-    end
-
     def run_worker!(operation, request)
       operation = operation.to_s
       raise ArgumentError, "unsupported sandbox operation: #{operation}" unless OPERATIONS.include?(operation)
 
       require "landlock"
-      payload = JSON.dump({ operation: operation, request: request })
+      config = SafeImage.config
+      payload = JSON.dump(
+        {
+          operation: operation,
+          request: request,
+          # The worker is a fresh process and must be configured like the
+          # parent — minus landlock, since it already runs inside the sandbox.
+          config: { backend: config.backend, max_pixels: config.max_pixels }
+        }
+      )
       code = <<~'RUBY'
         require "json"
         require "safe_image"
@@ -106,9 +107,14 @@ module SafeImage
         args = request[:args] || []
         kwargs = deep_symbolize(request[:kwargs] || {})
 
-        result = SafeImage.with_sandbox_disabled do
-          SafeImage.__send__(operation, *args, **kwargs)
-        end
+        config = payload.fetch(:config)
+        SafeImage.configure!(
+          backend: config.fetch(:backend).to_sym,
+          landlock: false,
+          max_pixels: config.fetch(:max_pixels)
+        )
+
+        result = SafeImage.__send__(operation, *args, **kwargs)
 
         if defined?(SafeImage::Result) && result.is_a?(SafeImage::Result)
           puts JSON.dump({ __type: "Result", data: result.to_h })
