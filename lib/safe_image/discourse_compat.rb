@@ -227,17 +227,29 @@ module SafeImage
       frame_count(path, max_pixels: max_pixels).to_i > 1
     end
 
-    def letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "NimbusSans-Regular")
+    def letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "DejaVu-Sans", backend: :auto)
       output = PathSafety.ensure_safe_output_path!(output).to_s
-      info = ImageMagickBackend.letter_avatar(
-        output: output,
-        size: size,
-        background_rgb: background_rgb,
-        letter: letter,
-        pointsize: pointsize,
-        font: font
-      )
-      result_from_info("generated", output, info, "imagemagick")
+      request = { output: output, size: size, background_rgb: background_rgb, letter: letter, pointsize: pointsize, font: font }
+
+      info, backend_name =
+        case backend.to_sym
+        when :vips
+          [VipsBackend.letter_avatar(**request), "libvips-direct"]
+        when :imagemagick, :magick
+          [ImageMagickBackend.letter_avatar(**request), "imagemagick"]
+        when :auto
+          # Native Pango rendering; ImageMagick only when this libvips build
+          # has no text support.
+          begin
+            [VipsBackend.letter_avatar(**request), "libvips-direct"]
+          rescue UnsupportedFormatError
+            [ImageMagickBackend.letter_avatar(**request), "imagemagick"]
+          end
+        else
+          raise ArgumentError, "unknown backend: #{backend.inspect}"
+        end
+
+      result_from_info("generated", output, info, backend_name)
     end
 
     def optimize_image!(path, allow_lossy_png: false, strip_metadata: true, quality: nil, strict: true)

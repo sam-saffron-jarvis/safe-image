@@ -19,6 +19,8 @@ Gem::Specification.new do |spec|
     "lib/**/*.rb",
     "lib/safe_image/RT_sRGB.icm",
     "lib/safe_image/imagemagick_policy/policy.xml",
+    "lib/safe_image/fonts/DejaVuSans.ttf",
+    "lib/safe_image/fonts/DEJAVU-LICENSE",
     "ext/**/*.{c,rb}",
     "LICENSE",
     "README.md",

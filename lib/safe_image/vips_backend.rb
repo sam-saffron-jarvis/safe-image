@@ -31,6 +31,47 @@ module SafeImage
       Native.pages(input, max_pixels)
     end
 
+    # Maps the public font tokens (shared with the ImageMagick backend) to
+    # Pango family names. DejaVu Sans additionally pins the font file bundled
+    # with the gem, so its rendering does not depend on host fonts.
+    BUNDLED_DEJAVU = File.expand_path("fonts/DejaVuSans.ttf", __dir__)
+    PANGO_FONTS = {
+      "DejaVu-Sans" => ["DejaVu Sans", BUNDLED_DEJAVU],
+      "NimbusSans-Regular" => ["Nimbus Sans", nil],
+      "Liberation-Sans" => ["Liberation Sans", nil],
+      "Arial" => ["Arial", nil],
+      "Helvetica" => ["Helvetica", nil],
+      "Adwaita-Sans" => ["Adwaita Sans", nil]
+    }.freeze
+
+    def letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "DejaVu-Sans")
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      output = PathSafety.ensure_safe_output_path!(output).to_s
+      size = Integer(size)
+      raise ArgumentError, "size must be 1..4096" unless (1..4096).cover?(size)
+      pointsize = Integer(pointsize)
+      raise ArgumentError, "pointsize must be 1..2000" unless (1..2000).cover?(pointsize)
+      rgb = Array(background_rgb).map { |value| Integer(value) }
+      unless rgb.length == 3 && rgb.all? { |value| (0..255).cover?(value) }
+        raise ArgumentError, "background_rgb must have three channels in 0..255"
+      end
+      family, fontfile = PANGO_FONTS.fetch(font.to_s) { raise ArgumentError, "unsupported font: #{font.to_s.inspect}" }
+      fontfile = nil unless fontfile && File.file?(fontfile)
+
+      # vips_text parses Pango markup, and the glyph derives from user input.
+      glyph = letter.to_s.each_grapheme_cluster.first.to_s.strip
+      markup = glyph.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;")
+
+      Native.letter_avatar(output, size, rgb[0], rgb[1], rgb[2], markup, "#{family} #{pointsize}", fontfile.to_s)
+      {
+        input_format: "generated",
+        output_format: "png",
+        width: size,
+        height: size,
+        duration_ms: (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000
+      }
+    end
+
     def normalized_format(format)
       format = format.to_s.downcase
       format == "jpeg" ? "jpg" : format

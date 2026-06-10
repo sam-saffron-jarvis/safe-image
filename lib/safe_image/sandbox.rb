@@ -222,6 +222,12 @@ module SafeImage
       paths << RbConfig::CONFIG["sitearchdir"]
       paths << RbConfig::CONFIG["vendorarchdir"]
       paths << File.dirname(RbConfig.ruby)
+      # Pango/fontconfig need the font directories and configs for the native
+      # letter_avatar text rendering inside the worker.
+      paths << "/etc/fonts"
+      paths << "/usr/share/fonts"
+      paths << "/usr/local/share/fonts"
+      paths << "/var/cache/fontconfig"
       paths
     end
 

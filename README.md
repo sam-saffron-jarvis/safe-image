@@ -506,17 +506,33 @@ SafeImage.dominant_color("upload.png")                       # => "6F745E"
 SafeImage.dominant_color("upload.png", backend: :vips)       # ImageMagick-free
 ```
 
-### `SafeImage.letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "NimbusSans-Regular")`
+### `SafeImage.letter_avatar(output:, size:, background_rgb:, letter:, pointsize: 280, font: "DejaVu-Sans", backend: :auto)`
 
-Generates a square letter avatar PNG.
+Generates a square letter avatar PNG: one grapheme blended in white at 80%
+opacity over a solid background.
+
+The default `:auto` backend renders natively through libvips' Pango text
+support (the glyph is markup-escaped before rendering) and falls back to
+ImageMagick only when the libvips build has no text renderer. Pass
+`backend: :vips` or `backend: :imagemagick` to pin a path.
+
+The default `DejaVu-Sans` font uses the DejaVu Sans file bundled with the gem
+(see `lib/safe_image/fonts/DEJAVU-LICENSE`), so rendering does not depend on
+which fonts the host has installed. The other allowlisted tokens
+(`NimbusSans-Regular`, `Liberation-Sans`, `Arial`, `Helvetica`,
+`Adwaita-Sans`) resolve through fontconfig.
+
+The native path centres the glyph's ink box optically, which differs from the
+ImageMagick path's baseline placement (where descenders could clip at the
+canvas edge). Treat switching backends as a visual change: regenerate cached
+avatars (in Discourse, bump `LetterAvatar::VERSION`).
 
 ```ruby
 SafeImage.letter_avatar(
   output: "avatar.png",
   size: 360,
   background_rgb: [1, 2, 3],
-  letter: "S",
-  font: "Adwaita-Sans"
+  letter: "S"
 )
 ```
 
@@ -728,6 +744,10 @@ Safe Image is MIT licensed.
 
 The gem dynamically links to system `libvips`; `libvips` is
 LGPL-2.1-or-later. Safe Image does not vendor `libvips`.
+
+The gem bundles the DejaVu Sans font for deterministic letter-avatar
+rendering; its license (Bitstream Vera derivative, freely redistributable)
+ships alongside the font at `lib/safe_image/fonts/DEJAVU-LICENSE`.
 
 Optional command-line tools are discovered at runtime and executed as external
 programs; they are not bundled into the gem. Typical licenses for those optional

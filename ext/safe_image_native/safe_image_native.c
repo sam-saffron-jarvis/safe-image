@@ -398,6 +398,100 @@ static VALUE rb_crop_north(VALUE self, VALUE input_val, VALUE output_val, VALUE 
   return hash;
 }
 
+/* Render a letter avatar: a Pango-rendered glyph blended in white at 80%
+ * opacity over a solid background. The blend bg*(1-0.8*m/255) + 255*(0.8*m/255)
+ * rearranges to a*mask + b per channel, so the whole composite is one
+ * vips_linear over the text coverage mask. The markup string is escaped by the
+ * Ruby caller; font and fontfile come from an allowlist. */
+static VALUE rb_letter_avatar(VALUE self, VALUE output_val, VALUE size_val, VALUE r_val, VALUE g_val, VALUE b_val, VALUE markup_val, VALUE font_val, VALUE fontfile_val) {
+  Check_Type(output_val, T_STRING);
+  Check_Type(markup_val, T_STRING);
+  Check_Type(font_val, T_STRING);
+  Check_Type(fontfile_val, T_STRING);
+  int size = NUM2INT(size_val);
+  int red = NUM2INT(r_val);
+  int green = NUM2INT(g_val);
+  int blue = NUM2INT(b_val);
+  if (size < 1 || size > 4096) rb_raise(rb_eArgError, "size must be 1..4096");
+  if (red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 || blue > 255)
+    rb_raise(rb_eArgError, "background channels must be 0..255");
+
+  init_vips_once();
+  if (!vips_type_find("VipsOperation", "text"))
+    rb_raise(eUnsupported, "this libvips build has no text renderer (Pango support missing)");
+
+  const char *markup = StringValueCStr(markup_val);
+  const char *fontfile = StringValueCStr(fontfile_val);
+
+  VipsImage *mask = NULL;
+  if (markup[0] == '\0') {
+    /* Blank letter: solid background only. */
+    if (vips_black(&mask, size, size, NULL) != 0) raise_vips();
+  } else {
+    VipsImage *text = NULL;
+    int rc;
+    if (fontfile[0] != '\0') {
+      rc = vips_text(&text, markup, "font", StringValueCStr(font_val), "dpi", 72, "fontfile", fontfile, NULL);
+    } else {
+      rc = vips_text(&text, markup, "font", StringValueCStr(font_val), "dpi", 72, NULL);
+    }
+    if (rc != 0 || text == NULL) raise_vips();
+
+    /* vips_text returns the tight ink box; crop to the canvas when the
+     * pointsize overflows it, then centre the ink optically. */
+    if (text->Xsize > size || text->Ysize > size) {
+      VipsImage *cropped = NULL;
+      int crop_w = text->Xsize < size ? text->Xsize : size;
+      int crop_h = text->Ysize < size ? text->Ysize : size;
+      if (vips_extract_area(text, &cropped, (text->Xsize - crop_w) / 2, (text->Ysize - crop_h) / 2, crop_w, crop_h, NULL) != 0) {
+        g_object_unref(text);
+        raise_vips();
+      }
+      g_object_unref(text);
+      text = cropped;
+    }
+
+    if (vips_embed(text, &mask, (size - text->Xsize) / 2, (size - text->Ysize) / 2, size, size, NULL) != 0) {
+      g_object_unref(text);
+      raise_vips();
+    }
+    g_object_unref(text);
+  }
+
+  double opacity = 204.0 / 255.0; /* #FFFFFFCC */
+  double a[3] = {
+    (255.0 - red) * opacity / 255.0,
+    (255.0 - green) * opacity / 255.0,
+    (255.0 - blue) * opacity / 255.0
+  };
+  double b[3] = { (double)red, (double)green, (double)blue };
+
+  VipsImage *blended = NULL;
+  if (vips_linear(mask, &blended, a, b, 3, NULL) != 0) {
+    g_object_unref(mask);
+    raise_vips();
+  }
+  g_object_unref(mask);
+
+  VipsImage *out = NULL;
+  if (vips_cast(blended, &out, VIPS_FORMAT_UCHAR, NULL) != 0) {
+    g_object_unref(blended);
+    raise_vips();
+  }
+  g_object_unref(blended);
+  out->Type = VIPS_INTERPRETATION_sRGB;
+
+  if (vips_pngsave(out, StringValueCStr(output_val),
+      "compression", 6,
+      "keep", VIPS_FOREIGN_KEEP_NONE,
+      NULL) != 0) {
+    g_object_unref(out);
+    raise_vips();
+  }
+  g_object_unref(out);
+  return Qtrue;
+}
+
 /* Encode a raw RGBA buffer (top-down rows) as PNG. Used by the pure-Ruby ICO
  * decoder so legacy DIB favicon payloads never touch ImageMagick. */
 static VALUE rb_png_from_rgba(VALUE self, VALUE bytes_val, VALUE width_val, VALUE height_val, VALUE output_val) {
@@ -568,4 +662,5 @@ void Init_safe_image_native(void) {
   rb_define_singleton_method(mNative, "dominant_color", rb_dominant_color, 2);
   rb_define_singleton_method(mNative, "pages", rb_pages, 2);
   rb_define_singleton_method(mNative, "png_from_rgba", rb_png_from_rgba, 4);
+  rb_define_singleton_method(mNative, "letter_avatar", rb_letter_avatar, 8);
 }
