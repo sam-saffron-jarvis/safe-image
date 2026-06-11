@@ -27,6 +27,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error behaviour. `fetch_remote` and `remote_dominant_color` still download
   the complete body.
 
+### Security
+
+- **SVG parsing rejects encodings the byte-level guards cannot see through.**
+  The DOCTYPE/processing-instruction guards are ASCII byte scans; a UTF-16
+  document interleaves NUL bytes between the ASCII characters, so a
+  `<!DOCTYPE` (and an entity payload behind it) could slip past them while
+  REXML still decoded and honoured it. SVG documents must now be UTF-8 (BOM
+  allowed) or declare a single-byte ASCII-transparent charset (US-ASCII,
+  ISO-8859-*, Windows-125x): UTF-16/32 BOMs, embedded NUL bytes, and declared
+  multi-byte or transforming encodings (Shift_JIS, GBK, EUC-*, ISO-2022-*,
+  UTF-7) raise `InvalidImageError`. Declared names that fit the allowed shape
+  but resolve to no real encoding (e.g. `utf8`, `windows-1259`) also fail
+  closed as `InvalidImageError` instead of surfacing REXML's bare
+  `ArgumentError`.
+
 ## [0.2.0] - 2026-06-10
 
 The host's whole image-processing posture is now decided in one place, once,
