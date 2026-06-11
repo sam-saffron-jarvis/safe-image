@@ -90,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error behaviour. `fetch_remote` and `remote_dominant_color` still download
   the complete body.
 
+### Fixed
+
+- **JPEGs with an EXIF orientation no longer fail on the libvips path once
+  they outgrow the sequential readahead window (~512px — every real camera
+  photo).** `resize`, `crop`, `convert`/`convert_to_jpeg` and the
+  `fix_orientation` re-encode tier loaded input with `access: sequential` and
+  then autorotated, and the rotation's out-of-order row reads raised
+  `VipsJpeg: out of order read`. Oriented images are now reloaded with random
+  access before autorotation; upright images keep the streaming sequential
+  load, and the pixel cap still runs before any decode.
+
 ### Security
 
 - **Presentation-attribute `url()` references fail closed unless they are a

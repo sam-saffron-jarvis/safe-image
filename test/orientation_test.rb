@@ -43,6 +43,22 @@ module SafeImage
       assert_equal 1, SafeImage.orientation(tmp_path("fixed.jpg"))
     end
 
+    # Camera-sized images outgrow libvips' sequential readahead (~512px), so
+    # autorot needs the random-access reload in Native.load_image; without it
+    # every manual-autorot path fails with "VipsJpeg: out of order read".
+    def test_handles_large_oriented_jpegs_outside_the_sequential_window
+      path = oriented_jpg("big6.jpg", 6, width: 1021, height: 1023)
+
+      result = SafeImage.fix_orientation(path, tmp_path("big_fixed.jpg"))
+      assert_equal "libvips-direct", result.backend
+      assert_result result, width: 1023, height: 1021, format: "jpg"
+      assert_equal 1, SafeImage.orientation(tmp_path("big_fixed.jpg"))
+
+      result = SafeImage.convert(path, tmp_path("big_conv.jpg"), format: "jpg", optimize: false)
+      assert_result result, width: 1023, height: 1021, format: "jpg"
+      assert_equal 1, SafeImage.orientation(tmp_path("big_conv.jpg"))
+    end
+
     def test_fix_orientation_in_place
       path = oriented_jpg("inplace.jpg", 6, width: 192, height: 128)
 

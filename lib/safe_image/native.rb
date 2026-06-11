@@ -75,7 +75,7 @@ module SafeImage
         out_format = output_format!(format)
 
         VipsGlue.with_images do |track|
-          image, input_format = load_image(track, String(input))
+          image, input_format = load_image(track, String(input), autorotate: true)
           check_pixels!(image, max_pixels)
           rotated = track.call(VipsGlue.operation("autorot", { in: image }))
           resized = track.call(VipsGlue.operation("resize", { in: rotated, scale: scale }))
@@ -94,7 +94,7 @@ module SafeImage
         out_format = output_format!(format)
 
         VipsGlue.with_images do |track|
-          image, input_format = load_image(track, String(input))
+          image, input_format = load_image(track, String(input), autorotate: true)
           check_pixels!(image, max_pixels)
           rotated = track.call(VipsGlue.operation("autorot", { in: image }))
 
@@ -116,7 +116,7 @@ module SafeImage
         out_format = output_format!(format)
 
         VipsGlue.with_images do |track|
-          image, input_format = load_image(track, String(input))
+          image, input_format = load_image(track, String(input), autorotate: true)
           check_pixels!(image, max_pixels)
           rotated = track.call(VipsGlue.operation("autorot", { in: image }))
 
@@ -306,7 +306,7 @@ module SafeImage
         raise ArgumentError, "quality must be 1..100" unless (1..100).cover?(quality)
       end
 
-      def load_image(track, path)
+      def load_image(track, path, autorotate: false)
         format = normalized_format(File.extname(path).delete_prefix("."))
         raise UnsupportedFormatError, "unsupported input format" unless format
 
@@ -319,9 +319,17 @@ module SafeImage
           raise UnsupportedFormatError, "this libvips build has no JPEG XL loader" unless VipsGlue.type_find?("jxlload")
         end
 
-        image = track.call(
-          VipsGlue.operation(LOADERS.fetch(format), { filename: path, access: "sequential", fail_on: "error" })
-        )
+        options = { filename: path, access: "sequential", fail_on: "error" }
+        image = track.call(VipsGlue.operation(LOADERS.fetch(format), options))
+
+        # autorot flips/rotates pull rows out of input order, which a
+        # sequential source can only serve while the image fits its readahead
+        # window (~512px); larger oriented images fail with "out of order
+        # read". Reload those with random access — the open itself is
+        # header-only, so the caller's pixel cap still runs before any decode.
+        if autorotate && VipsGlue.orientation(image) > 1
+          image = track.call(VipsGlue.operation(LOADERS.fetch(format), options.merge(access: "random")))
+        end
         [image, format]
       end
 
