@@ -142,7 +142,7 @@ sudo pacman -S --needed libvips \
 | `jpegoptim` | required for JPEG `optimize` | lossless JPEG optimisation and metadata stripping | JPEG `optimize` raises in strict mode |
 | `oxipng` | required for PNG `optimize` | lossless PNG optimisation | PNG `optimize` raises in strict mode |
 | `pngquant` | optional | lossy PNG quantisation (`optimize_mode: :lossy`, files < 500KB) | lossy mode silently skips the quantisation pass |
-| `jpegtran` (libjpeg-turbo) | optional | lossless tier of `fix_orientation` for MCU-aligned JPEGs | falls back to the libvips re-encode tier |
+| `jpegtran` (libjpeg-turbo) | optional | lossless tier of `fix_orientation`; uprighting EXIF-oriented JPEGs in `optimize` | `fix_orientation` falls back to the libvips re-encode tier; `optimize` of an oriented JPEG raises in strict mode (left untouched otherwise) |
 | `cjpegli` (libjxl) | optional | higher-quality encoding of generated JPEGs on the `:vips` backend — used automatically when installed | generated JPEGs use the backend's own encoder |
 | `landlock` gem (Linux kernel ≥ 5.13) | required for `landlock: true` | the atomic sandbox around every operation | `configure!(landlock: true)` raises at boot; `sandbox_available?` is false |
 | `rexml` gem | automatic | SVG sanitising and SVG metadata | installed as a gem dependency |
@@ -228,7 +228,9 @@ Optimizer operations return a hash:
   before_bytes: 123_456,
   after_bytes: 120_000,
   saved_bytes: 3_456,
-  tools: ["jpegoptim"]
+  tools: ["jpegoptim"],
+  rotated_from: nil,  # the EXIF orientation baked into the pixels, when one was set
+  trimmed: false      # true when uprighting dropped partial edge blocks (see optimize)
 }
 ```
 
@@ -691,6 +693,14 @@ JPEG path:
 - uses `jpegoptim`
 - `quality:` maps to `jpegoptim --max`
 - metadata is stripped unless `strip_metadata: false`
+- an EXIF-oriented JPEG is uprighted first with jpegtran's lossless
+  transforms, because stripping would otherwise delete the orientation tag
+  without applying the rotation and ship the image sideways. MCU-aligned
+  images rotate exactly (`-perfect`); others drop the partial edge blocks
+  (`-trim`, under one MCU — at most 15px), reported as `trimmed: true` in
+  the result rather than re-encoding behind a method named `optimize`.
+  Without `jpegtran`, an oriented JPEG raises in strict mode and is left
+  untouched otherwise — never stripped sideways.
 
 PNG path:
 

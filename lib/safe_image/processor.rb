@@ -75,7 +75,7 @@ module SafeImage
 
       opt_info = nil
       if optimize && OPTIMIZABLE_OUTPUTS.include?(out_format)
-        opt_info = Optimizer.optimize(output, mode: optimize_mode, strip_metadata: true, quality: out_format == "jpg" ? quality : nil)
+        opt_info = Optimizer.optimize(output, mode: optimize_mode, strip_metadata: true, quality: out_format == "jpg" ? quality : nil, assume_upright: true)
       end
 
       Result.new(

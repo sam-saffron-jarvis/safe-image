@@ -64,6 +64,17 @@ module SafeImage
       tmp_path(name).tap { |path| File.write(path, content) }
     end
 
+    # Renders a JPEG of the given dimensions and splices in a minimal EXIF
+    # APP1 segment carrying the orientation tag.
+    def oriented_jpg(name, orientation, width:, height:)
+      plain = tmp_path("plain-#{name}")
+      SafeImage.thumbnail(input: PNG, output: plain, width: width, height: height, max_pixels: PNG_PIXELS)
+      jpg = File.binread(plain)
+      tiff = "II".b + [42, 8].pack("vV") + [1].pack("v") + [0x0112, 3, 1, orientation, 0].pack("vvVvv") + [0].pack("V")
+      app1 = "\xFF\xE1".b + [tiff.bytesize + 8].pack("n") + "Exif\0\0".b + tiff
+      write_tmp(name, jpg[0, 2] + app1 + jpg[2..])
+    end
+
     def assert_file_written(path)
       assert_path_exists path
       assert_operator File.size(path), :>, 0, "expected #{path} to be non-empty"

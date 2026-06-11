@@ -182,7 +182,7 @@ module SafeImage
       format = File.extname(output).delete_prefix(".").downcase
       format = "jpg" if format == "jpeg"
       return unless Processor::OPTIMIZABLE_OUTPUTS.include?(format)
-      Optimizer.optimize(output, mode: :lossless, strip_metadata: true, quality: quality)
+      Optimizer.optimize(output, mode: :lossless, strip_metadata: true, quality: quality, assume_upright: true)
     end
 
     # JPEG default when the caller passes no quality: matches what ImageMagick
@@ -264,17 +264,6 @@ module SafeImage
       convert(from, to, format: "jpg", quality: quality, optimize: optimize, max_pixels: max_pixels, chroma_subsampling: chroma_subsampling)
     end
 
-    # EXIF orientation values mapped onto jpegtran's lossless transforms.
-    JPEGTRAN_OPERATIONS = {
-      2 => ["-flip", "horizontal"],
-      3 => ["-rotate", "180"],
-      4 => ["-flip", "vertical"],
-      5 => ["-transpose"],
-      6 => ["-rotate", "90"],
-      7 => ["-transverse"],
-      8 => ["-rotate", "270"]
-    }.freeze
-
     def fix_orientation(from, to = from, max_pixels: nil, quality: nil)
       max_pixels = SafeImage.resolved_max_pixels(max_pixels)
       output = PathSafety.ensure_safe_output_path!(to).to_s
@@ -323,7 +312,7 @@ module SafeImage
     def jpegtran_fix_orientation(input, output, orient)
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       info = write_through_tempfile(output) do |tmp_path|
-        Runner.run!(["jpegtran", "-copy", "none", "-perfect", *JPEGTRAN_OPERATIONS.fetch(orient), "-outfile", tmp_path, input])
+        Runner.run!(["jpegtran", "-copy", "none", "-perfect", *Optimizer::JPEGTRAN_OPERATIONS.fetch(orient), "-outfile", tmp_path, input])
         Native.probe(tmp_path)
       end
       result_from_info(

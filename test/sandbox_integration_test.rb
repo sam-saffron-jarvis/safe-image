@@ -160,6 +160,17 @@ module SafeImage
       assert_includes result.fetch("tools") { result.fetch(:tools) }, "jpegoptim"
     end
 
+    def test_optimize_uprights_oriented_jpegs
+      skip "jpegtran unavailable" unless Runner.available?("jpegtran")
+      path = oriented_jpg("opt-oriented.jpg", 6, width: 192, height: 128)
+
+      result = SafeImage.optimize(path, strict: true)
+
+      assert_includes result.fetch("tools") { result.fetch(:tools) }, "jpegtran"
+      assert_equal 1, SafeImage.orientation(path)
+      assert_equal [128, 192], SafeImage.size(path)
+    end
+
     def test_optimize_image!
       jpg = tmp_path("opt-bang.jpg")
       FileUtils.cp(JPG, jpg)

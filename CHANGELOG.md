@@ -92,6 +92,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`optimize` no longer ships sideways JPEGs.** With `strip_metadata: true`
+  (the default), stripping deleted the EXIF orientation tag without applying
+  the rotation, so an oriented camera photo came out rendered 90/180° wrong.
+  `optimize` now bakes the rotation into the pixels first via jpegtran's
+  lossless transforms: `-perfect` when the dimensions are MCU-aligned, else
+  `-trim`, which drops the partial edge blocks (under one MCU, at most 15px)
+  instead of hiding a lossy re-encode. The result hash gains `rotated_from:`
+  and `trimmed:` so the trim is reported, never silent — image_optim's jhead
+  worker (Discourse's `FileHelper.optimize_image!`) does the same transform
+  but trims silently. Without jpegtran an oriented JPEG raises in strict mode
+  and is left untouched otherwise; reading the tag goes through the configured
+  backend, so `optimize` now also enforces the pixel cap before touching an
+  oriented JPEG. Internal callers optimising output the gem just encoded skip
+  the check (`assume_upright:`).
+
 - **JPEGs with an EXIF orientation no longer fail on the libvips path once
   they outgrow the sequential readahead window (~512px — every real camera
   photo).** `resize`, `crop`, `convert`/`convert_to_jpeg` and the
