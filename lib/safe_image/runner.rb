@@ -28,7 +28,15 @@ module SafeImage
     IMAGEMAGICK_POLICY_FILE = File.join(IMAGEMAGICK_POLICY_PATH, "policy.xml").freeze
     BASE_ENV = {
       "PATH" => TRUSTED_PATH,
-      "VIPS_BLOCK_UNTRUSTED" => "1"
+      "VIPS_BLOCK_UNTRUSTED" => "1",
+      # Cap glibc's per-thread malloc arenas. Multithreaded tools (oxipng's
+      # rayon pool, ImageMagick's OpenMP) otherwise reserve an arena per thread
+      # — up to 8x64MB of *address space* per core — which, combined with the
+      # sandbox's RLIMIT_AS memory cap, spuriously fails the tool under
+      # concurrency even though real memory use is tiny. AS counts reservations,
+      # not RSS; bounding arenas is the standard mitigation and costs nothing
+      # for these compute-bound tools.
+      "MALLOC_ARENA_MAX" => "2"
     }.freeze
 
     def run!(argv, timeout: DEFAULT_TIMEOUT, env: {}, sandbox: false, read: [], write: [])

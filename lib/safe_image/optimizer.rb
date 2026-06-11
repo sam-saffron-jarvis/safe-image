@@ -69,8 +69,18 @@ module SafeImage
               argv = ["pngquant", "--force", "--skip-if-larger", "--output", tmp_path.to_s]
               argv << "--quality=#{quality}" if quality # e.g. "65-90"
               argv << path.to_s
-              Runner.run!(argv, timeout: timeout)
-              if tmp_path.file? && File.size(tmp_path) < File.size(path)
+              skipped = false
+              begin
+                Runner.run!(argv, timeout: timeout)
+              rescue CommandError => e
+                # 98: --skip-if-larger declined the result; 99: --quality not
+                # met. Both mean "keep the original", not a failure — and the
+                # pre-created tempfile is still empty, so it must not win the
+                # size comparison below.
+                raise unless [98, 99].include?(e.status)
+                skipped = true
+              end
+              if !skipped && tmp_path.file? && File.size(tmp_path).positive? && File.size(tmp_path) < File.size(path)
                 FileUtils.mv(tmp_path, path)
                 tools << "pngquant"
               end

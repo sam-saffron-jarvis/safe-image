@@ -72,6 +72,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Sandboxed operations are served by a pool of resident zygote workers —
+  warm Landlock overhead drops from ~100ms to ~3–8ms per operation, with
+  near-linear concurrency.** Previously every sandboxed call exec'd a fresh
+  Ruby that re-paid interpreter boot, rubygems, the gem's requires, and
+  libvips init. A zygote boots that once, then forks a child per operation;
+  the child applies rlimits, its per-operation Landlock policy (filesystem
+  allowlist, all TCP denied on ABI ≥ 4, abstract-unix-socket/signal scopes on
+  ABI ≥ 6), and — when the installed `landlock` gem exposes
+  `seccomp_deny_network!` — the helper's deny-all-network seccomp filter
+  (blocking sockets of every family, closing the UDP gap the in-process
+  Landlock policy alone leaves open), *before* touching untrusted input, and
+  exits after the operation. Workers are pooled so N threads run N sandboxed
+  operations at once (the single zygote would serialise them): the pool grows
+  on demand to `SAFE_IMAGE_ZYGOTE_WORKERS` (default 8) and offered concurrency
+  past the cap blocks until a worker frees, bounding concurrent libvips
+  memory. An idle worker exits after `Zygote::IDLE_SECONDS` (300, overridable
+  via `SAFE_IMAGE_ZYGOTE_IDLE_SECONDS`; idling holds ~16MB private memory and
+  no CPU), exits immediately when its parent process does, and `configure!`
+  always retires the pool, so no stale process outlives its parent or a
+  reconfigure. Forking is sound because the zygote never runs operations
+  itself: libvips is initialised but quiescent (zero native threads) at every
+  fork — verified empirically. Outputs are byte-identical to both the exec
+  worker and unsandboxed operation. `SAFE_IMAGE_ZYGOTE=0` falls back to the
+  exec-per-operation worker.
+
+- **rexml loads on first SVG use instead of at `require "safe_image"`.**
+  rexml costs ~27ms to parse and only the SVG paths need it, so every boot of
+  the gem — and in particular every Landlock sandbox worker, which is a fresh
+  Ruby process per operation — was paying it on operations that never touch
+  SVG. Measured per-op sandbox cost drops from ~102ms to ~85ms on the vips
+  backend and ~75ms to ~58ms on the imagemagick backend.
+
 - **Remote fetches reject bad responses from the headers alone.** The
   `Content-Type` allowlist and content-type/extension agreement checks now run
   before any body bytes are read (previously the body was downloaded first and
@@ -91,6 +123,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the complete body.
 
 ### Fixed
+
+- **Lossy PNG optimisation no longer fails when pngquant declines to
+  quantise.** pngquant signals "quantised result not used" through exit
+  status 98 (`--skip-if-larger`) and 99 (`--quality` not met) — for example
+  on low-bit-depth grayscale PNGs its RGBA-palette output cannot beat —
+  and `optimize(mode: :lossy)` raised `CommandError` instead of keeping the
+  original and continuing to oxipng. Found by running 10 random Wikimedia
+  Commons images through the optimizer.
 
 - **`optimize` no longer ships sideways JPEGs.** With `strip_metadata: true`
   (the default), stripping deleted the EXIF orientation tag without applying

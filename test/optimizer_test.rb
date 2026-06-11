@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "zlib"
 require_relative "test_helper"
 
 module SafeImage
@@ -68,6 +69,19 @@ module SafeImage
       assert_equal [128, 192], SafeImage.size(path)
     end
 
+    # pngquant exits 98 when --skip-if-larger declines the quantised result —
+    # e.g. for low-bit-depth grayscale PNGs its RGBA-palette output cannot
+    # beat. That is a skip, not a failure.
+    def test_lossy_optimize_keeps_pngs_pngquant_cannot_shrink
+      skip "pngquant unavailable" unless Runner.available?("pngquant")
+      path = gray4_png("gray4.png")
+
+      result = SafeImage.optimize(path, mode: :lossy)
+
+      refute_includes result.fetch(:tools), "pngquant"
+      assert_includes result.fetch(:tools), "oxipng"
+    end
+
     # Internal contract: callers may only assert uprightness for files this
     # gem just encoded — no rotation is applied even when a tag is present.
     # (jpegoptim itself only rewrites when the result shrinks, so whether the
@@ -79,6 +93,25 @@ module SafeImage
 
       refute_includes result.fetch(:tools), "jpegtran"
       assert_equal [192, 128], SafeImage.size(path)
+    end
+
+    private
+
+    # Hand-built 64x64 4-bit grayscale PNG (16 shades) — a shape pngquant's
+    # palette output cannot shrink, so --skip-if-larger fires (exit 98).
+    def gray4_png(name)
+      rows = (0...64).map do |y|
+        "\0".b + (0...32).map { |x| ((x % 16) << 4) | ((x + y) % 16) }.pack("C*")
+      end.join
+      png = "\x89PNG\r\n\x1a\n".b +
+        png_chunk("IHDR", [64, 64, 4, 0, 0, 0, 0].pack("NNCCCCC")) +
+        png_chunk("IDAT", Zlib::Deflate.deflate(rows)) +
+        png_chunk("IEND", "")
+      write_tmp(name, png)
+    end
+
+    def png_chunk(type, data)
+      [data.bytesize].pack("N") + type + data + [Zlib.crc32(type + data)].pack("N")
     end
   end
 end

@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "rexml/document"
-require "rexml/formatters/default"
 require "pathname"
 require "tempfile"
 require_relative "svg_css"
@@ -77,6 +75,11 @@ module SafeImage
     #   are only ever served as an external `<img src>`, CSS url(...), or their
     #   own file — never spliced into an HTML DOM.
     def sanitize!(path, max_pixels: nil, id_namespace: NAMESPACE_REQUIRED)
+      # Loaded here, not at file load: rexml costs ~27ms to parse, which every
+      # non-SVG operation — and every sandbox worker boot — would otherwise pay.
+      require "rexml/document"
+      require "rexml/formatters/default"
+
       namespace = resolve_namespace(id_namespace)
       path = Pathname.new(SvgMetadata.safe_svg_path(path))
       begin

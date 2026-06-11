@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
 require "pathname"
-require "rexml/document"
-require "rexml/parsers/pullparser"
 
 module SafeImage
   module SvgMetadata
@@ -82,6 +80,7 @@ module SafeImage
     # streaming path above. The streaming validation runs first so a document
     # that breaches the structural caps is rejected before the tree is built.
     def parse(path, max_bytes: MAX_SVG_BYTES)
+      require_rexml
       xml = read_svg(path, max_bytes: max_bytes)
       scan_svg!(xml)
       doc = REXML::Document.new(xml)
@@ -189,6 +188,7 @@ module SafeImage
     # that a parse-then-validate approach would build first. Returns the root
     # element's name and its attributes hash.
     def scan_svg!(xml)
+      require_rexml
       parser = REXML::Parsers::PullParser.new(xml)
       depth = -1
       elements = 0
@@ -222,6 +222,14 @@ module SafeImage
     # ArgumentError: same REXML encoding-lookup mapping as in parse above.
     rescue REXML::ParseException, ArgumentError => e
       raise InvalidImageError, "invalid SVG: #{e.message}"
+    end
+
+    # Loaded on first SVG use, not at file load: rexml costs ~27ms to parse,
+    # which every non-SVG operation — and every sandbox worker boot — would
+    # otherwise pay.
+    def require_rexml
+      require "rexml/document"
+      require "rexml/parsers/pullparser"
     end
   end
 end

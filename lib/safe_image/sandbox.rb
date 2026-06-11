@@ -61,7 +61,13 @@ module SafeImage
     def public_call!(operation, args:, kwargs:)
       operation = operation.to_s
       raise ArgumentError, "unsupported sandbox operation: #{operation}" unless OPERATIONS.include?(operation)
-      result = run_worker!(operation, { args: args, kwargs: kwargs })
+      request = { args: args, kwargs: kwargs }
+      result =
+        if Zygote.enabled?
+          Zygote.call!(operation, request)
+        else
+          run_worker!(operation, request)
+        end
       operation == "type" && result ? result.to_sym : result
     end
 
@@ -157,16 +163,7 @@ module SafeImage
           max_output_bytes: 512 * 1024,
           truncate_output: false
         )
-        response = JSON.parse(stdout, symbolize_names: true)
-        if response[:__type] == "Result"
-          data = response.fetch(:data)
-          Result.new(**data)
-        elsif response[:__type] == "Info"
-          data = response.fetch(:data)
-          Info.new(**data)
-        else
-          response[:data]
-        end
+        decode_payload(JSON.parse(stdout, symbolize_names: true))
       end
     rescue LoadError
       raise Error, "landlock sandbox requested but the landlock gem is unavailable"
@@ -178,6 +175,16 @@ module SafeImage
         stdout: e.stdout,
         stderr: e.stderr
       )
+    end
+
+    # Rebuilds a worker's {__type:, data:} JSON reply into the value the
+    # caller would have received inline.
+    def decode_payload(response)
+      case response[:__type]
+      when "Result" then Result.new(**response.fetch(:data))
+      when "Info" then Info.new(**response.fetch(:data))
+      else response[:data]
+      end
     end
 
     # JSON cannot represent symbols, so wrap symbol values as {"__sym__" => name}

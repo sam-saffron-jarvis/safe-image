@@ -961,10 +961,38 @@ a sandboxed command fails, the operation fails.
 
 The sandbox grants read/write access only to the paths inferred from the
 operation arguments, plus runtime/library paths and temporary directories needed
-by Ruby, libvips, ImageMagick, and optimizer tools. Network syscalls are denied
-through the Landlock helper's seccomp layer. Worker processes inherit the
+by Ruby, libvips, ImageMagick, and optimizer tools. Worker processes inherit the
 parent's backend and pixel-ceiling configuration; landlock is forced off
 inside the worker so sandboxed operations never nest.
+
+Operations are served by a pool of resident **zygote** workers: each is a
+fresh Ruby process that boots the gem once and then forks a child per
+operation, so the ~85ms boot cost (Ruby + requires + libvips init) is paid
+once per burst instead of per call — a warm sandboxed operation costs ~3–8ms
+over the unsandboxed one. The pool grows on demand to
+`SAFE_IMAGE_ZYGOTE_WORKERS` (default 8), so N threads run N sandboxed
+operations concurrently (throughput scales near-linearly with cores until the
+work itself saturates the CPU); offered concurrency past the cap blocks until
+a worker frees, which also bounds how many libvips decodes run at once.
+Idling is cheap (~16MB private memory per worker, zero CPU), so a worker
+lingers for `Zygote::IDLE_SECONDS` (300) without work before exiting on its
+own; the next operation boots a new one. Workers also exit immediately when
+their parent process does, and `configure!` always retires the pool.
+
+A zygote itself never touches untrusted bytes: each forked child first
+applies rlimits, its per-operation Landlock policy (filesystem allowlist, all
+TCP denied on Landlock ABI ≥ 4, abstract-unix-socket/signal scopes on
+ABI ≥ 6), and — when the installed `landlock` gem exposes
+`seccomp_deny_network!` — the helper's deny-all-network seccomp filter (which
+blocks sockets of every family, closing the non-TCP/UDP gap the in-process
+Landlock policy alone leaves open), and only then runs the operation. Forking
+is sound because the zygote never runs operations itself — libvips is
+initialised but quiescent (no native threads) at every fork.
+
+`SAFE_IMAGE_ZYGOTE=0` falls back to the exec-per-operation worker (a fresh
+sandboxed Ruby per call through the Landlock helper binary, whose seccomp
+filter denies sockets of every family, no pool); `SAFE_IMAGE_ZYGOTE_WORKERS`
+and `SAFE_IMAGE_ZYGOTE_IDLE_SECONDS` tune the pool cap and idle window.
 
 ## Development
 
