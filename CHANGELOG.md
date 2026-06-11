@@ -95,7 +95,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself: libvips is initialised but quiescent (zero native threads) at every
   fork — verified empirically. Outputs are byte-identical to both the exec
   worker and unsandboxed operation. `SAFE_IMAGE_ZYGOTE=0` falls back to the
-  exec-per-operation worker.
+  exec-per-operation worker. Pool correctness under concurrent reconfigure,
+  worker death, and fork is enforced by a per-worker generation token (a
+  worker checked out when `configure!` lands is retired on return, never
+  reused under stale config), channel-health (not process-liveness) reuse
+  decisions (a worker whose pipe broke is discarded, never re-pooled), a
+  `PR_SET_PDEATHSIG` so an operation child dies with its zygote, and
+  parent-side tmp-root cleanup that survives a SIGKILLed worker — all
+  exercised by a multithreaded chaos stress test (reconfigure + worker kills)
+  asserting no wrong output, no process/fd/tmpdir leak, and no deadlock.
+
+- **External tools run with `MALLOC_ARENA_MAX=2`.** Multithreaded optimizer
+  tools (oxipng's rayon pool, ImageMagick's OpenMP) otherwise have glibc
+  reserve a 64MB malloc arena per thread; combined with the sandbox's
+  `RLIMIT_AS` memory cap, that *address-space* reservation spuriously fails
+  the tool under concurrency even though real memory use is tiny. Bounding the
+  arena count is the standard mitigation and is free for these compute-bound
+  tools. Found by stress-testing concurrent sandboxed `convert`.
 
 - **rexml loads on first SVG use instead of at `require "safe_image"`.**
   rexml costs ~27ms to parse and only the SVG paths need it, so every boot of
