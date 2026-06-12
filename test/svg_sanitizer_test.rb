@@ -379,6 +379,28 @@ module SafeImage
       assert_equal 1, cleaned.scan(/(?<!:)href="#u1-shape"/).length, "an extra plain href was synthesized"
     end
 
+    def test_keeps_text_path_and_namespaces_its_fragment_reference
+      path = write_tmp("text-path.svg", <<~SVG)
+        <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="20">
+          <defs><path id="curve" d="M0 10 C20 0 40 20 60 10"/></defs>
+          <text><textPath href="#curve">Hello</textPath></text>
+          <text><textPath xlink:href="#curve">Legacy</textPath></text>
+          <text><textPath href="https://evil.example/curve">External</textPath></text>
+          <text><tref href="#curve">Obsolete</tref></text>
+        </svg>
+      SVG
+
+      SafeImage.sanitize_svg!(path, id_namespace: "u1")
+      cleaned = File.read(path)
+
+      assert_includes cleaned, "<textPath", "dropped textPath element"
+      assert_includes cleaned, 'id="u1-curve"', "referenced path id not namespaced"
+      assert_match(/(?<!:)href="#u1-curve"/, cleaned, "textPath href not namespaced")
+      assert_includes cleaned, 'xlink:href="#u1-curve"', "textPath xlink:href not namespaced"
+      refute_includes cleaned, "evil.example", "kept external textPath href"
+      refute_includes cleaned, "<tref", "kept obsolete tref element"
+    end
+
     def test_namespaces_aria_idref_references
       path = write_tmp("aria.svg", <<~SVG)
         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">

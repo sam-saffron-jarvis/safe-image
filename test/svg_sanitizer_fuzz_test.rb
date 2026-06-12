@@ -17,9 +17,9 @@ module SafeImage
     MAX_DEPTH = 3
 
     ELEMENTS = %w[
-      svg g defs rect circle line path text tspan linearGradient stop clipPath mask marker use style
-      script foreignObject image a metadata bad
-      s:g s:rect v:line s:text s:style s:script evil:rect html:script
+      svg g defs rect circle line path text tspan textPath linearGradient stop clipPath mask marker use style
+      script foreignObject image a metadata bad tref
+      s:g s:rect v:line s:text s:textPath s:style s:script evil:rect evil:textPath html:script
     ].freeze
 
     ATTRIBUTES = %w[

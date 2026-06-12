@@ -20,7 +20,7 @@ module SafeImage
   # unreachable (a DOCTYPE is rejected before parsing).
   module SvgSanitizer
     ALLOWED_ELEMENTS = %w[
-      svg g defs title desc path rect circle ellipse line polyline polygon text tspan
+      svg g defs title desc path rect circle ellipse line polyline polygon text tspan textPath
       linearGradient radialGradient stop clipPath mask pattern use symbol style
       marker
     ].freeze
