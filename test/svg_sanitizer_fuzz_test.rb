@@ -23,8 +23,19 @@ module SafeImage
     ].freeze
 
     ATTRIBUTES = %w[
-      id class x y x1 y1 x2 y2 width height r d fill stroke clip-path marker-end mask href xlink:href
+      id class x y x1 y1 x2 y2 width height r d points fill stroke clip-path marker marker-mid marker-end mask href xlink:href
       aria-labelledby aria-describedby style transform opacity onload onclick y:onload html:onload data-name xml:space src
+    ].freeze
+
+    # Dense geometry so the marker-per-vertex render-cost accounting (and the
+    # vertex counter) is exercised, not just single-shape paths. Kept modest so
+    # a marker reference multiplies it without certainly tripping the cap, so
+    # both the kept and rejected branches of the bound get fuzzed.
+    DENSE_GEOMETRY = [
+      "M0,0 #{'L9,9 ' * 64}",
+      "M0,0 #{'L9,9 ' * 512}",
+      ("1,1 " * 64).strip,
+      ("2,2 " * 512).strip
     ].freeze
 
     VALUES = [
@@ -104,7 +115,9 @@ module SafeImage
         ["modal fixed", "ok", "host btn-danger"].sample(random: rng)
       when "href", "xlink:href"
         ["#g", "#safe", "javascript:alert(1)", "data:image/gif,GIF89a", "defs.svg#icon", "/abs", "//evil.example/x"].sample(random: rng)
-      when "fill", "stroke", "clip-path", "marker-end", "mask", "style", "onload", "onclick", "y:onload", "html:onload"
+      when "d", "points"
+        DENSE_GEOMETRY.sample(random: rng)
+      when "marker", "marker-mid", "fill", "stroke", "clip-path", "marker-end", "mask", "style", "onload", "onclick", "y:onload", "html:onload"
         VALUES.sample(random: rng)
       when "aria-labelledby", "aria-describedby"
         ["title desc", "host", "g c"].sample(random: rng)

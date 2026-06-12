@@ -146,6 +146,83 @@ module SafeImage
       assert_raises(LimitError) { SafeImage.sanitize_svg!(bomb, id_namespace: "u1") }
     end
 
+    # A <marker> is drawn once per vertex of every path/line/polyline/polygon
+    # that references it, so (vertex count) x (marker subtree size) draws. A
+    # dense `d` (~200k vertices in 1 MB) times a non-trivial marker is a
+    # linear-but-huge render bomb that no node/byte/element cap can see; the
+    # render-units accounting must charge it and reject.
+    def test_marker_per_vertex_render_bomb_is_rejected
+      marker = %(<marker id="m" markerWidth="2" markerHeight="2">#{'<rect width="1" height="1"/>' * 50}</marker>)
+      segments = "L9,9 " * 180_000
+      bomb = write_tmp("marker-bomb.svg", <<~SVG)
+        <svg xmlns="#{SVG_XMLNS}" width="100" height="100">
+          <defs>#{marker}</defs>
+          <path marker-mid="url(#m)" d="M0,0 #{segments}"/>
+        </svg>
+      SVG
+      assert_raises(LimitError) { SafeImage.sanitize_svg!(bomb, id_namespace: "u1") }
+    end
+
+    # The marker reference can hide in a style="" twin of the marker-* attribute;
+    # it must be charged the same way, and a points-based polyline counts too.
+    def test_marker_render_bomb_via_style_and_points_is_rejected
+      marker = %(<marker id="m" markerWidth="2" markerHeight="2">#{'<rect width="1" height="1"/>' * 50}</marker>)
+      styled = write_tmp("marker-style-bomb.svg", <<~SVG)
+        <svg xmlns="#{SVG_XMLNS}" width="100" height="100">
+          <defs>#{marker}</defs>
+          <path style="marker-mid:url(#m)" d="M0,0 #{'L9,9 ' * 180_000}"/>
+        </svg>
+      SVG
+      assert_raises(LimitError) { SafeImage.sanitize_svg!(styled, id_namespace: "u1") }
+
+      points = write_tmp("marker-points-bomb.svg", <<~SVG)
+        <svg xmlns="#{SVG_XMLNS}" width="100" height="100">
+          <defs>#{marker}</defs>
+          <polyline marker-mid="url(#m)" points="#{'1,1 ' * 100_000}"/>
+        </svg>
+      SVG
+      assert_raises(LimitError) { SafeImage.sanitize_svg!(points, id_namespace: "u1") }
+    end
+
+    # A marker whose own content is itself a marked dense path: the multipliers
+    # compose through the shared id resolution, so a pair of moderate factors
+    # that each pass alone must be rejected when nested.
+    def test_marker_composition_multiplies_through_nested_references
+      composed = write_tmp("marker-compose.svg", <<~SVG)
+        <svg xmlns="#{SVG_XMLNS}" width="100" height="100">
+          <defs>
+            <marker id="inner" markerWidth="2" markerHeight="2"><circle r="1"/></marker>
+            <marker id="outer" markerWidth="2" markerHeight="2">
+              <path marker-mid="url(#inner)" d="M0,0 #{'L9,9 ' * 2000}"/>
+            </marker>
+          </defs>
+          <path marker-mid="url(#outer)" d="M0,0 #{'L9,9 ' * 2000}"/>
+        </svg>
+      SVG
+      assert_raises(LimitError) { SafeImage.sanitize_svg!(composed, id_namespace: "u1") }
+    end
+
+    # A real marker diagram — a handful of arrows on short lines — must survive.
+    # A single dense path with no marker reference (vertices but no multiplier)
+    # must also survive: the bound charges replication, not geometry detail.
+    def test_legitimate_marker_diagrams_and_dense_paths_are_preserved
+      arrows = (1..20).map { |i| %(<line x1="0" y1="#{i}" x2="10" y2="#{i}" marker-end="url(#a)"/>) }.join
+      diagram = sanitize(<<~SVG, id_namespace: "u1")
+        <svg xmlns="#{SVG_XMLNS}" width="100" height="100">
+          <defs><marker id="a" markerWidth="6" markerHeight="6"><path d="M0,0 L6,3 L0,6 Z"/></marker></defs>
+          #{arrows}
+        </svg>
+      SVG
+      assert_equal 20, diagram.scan(/<line\b/).length, "legitimate arrow diagram was rejected/mangled"
+
+      dense = write_tmp("dense-path.svg", <<~SVG)
+        <svg xmlns="#{SVG_XMLNS}" width="100" height="100">
+          <path fill="none" stroke="#000" d="M0,0 #{'L9,9 ' * 150_000}"/>
+        </svg>
+      SVG
+      assert SafeImage.sanitize_svg!(dense, id_namespace: "u1"), "dense marker-free path was wrongly rejected"
+    end
+
     def test_use_reference_cycle_is_rejected
       direct = write_tmp("use-cycle.svg", <<~SVG)
         <svg xmlns="#{SVG_XMLNS}" width="10" height="10">

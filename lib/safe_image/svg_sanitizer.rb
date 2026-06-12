@@ -85,18 +85,24 @@ module SafeImage
 
       namespace = resolve_namespace(id_namespace)
       path = Pathname.new(SvgMetadata.safe_svg_path(path))
+      # One read+scan+parse: parse_with_attributes returns the DOM and the
+      # streamed root attributes, so dimensions are validated off the same scan
+      # rather than reading and scanning the file a second time.
+      doc, root_attributes = SvgMetadata.parse_with_attributes(path.to_s)
       begin
-        SvgMetadata.dimensions(path.to_s, max_pixels: max_pixels)
+        SvgMetadata.dimensions_from_attributes(root_attributes, max_pixels: max_pixels)
       rescue InvalidImageError => e
         raise unless e.message.include?("dimensions are missing")
       end
-      doc = SvgMetadata.parse(path.to_s)
 
-      root = doc.root.deep_clone
+      # We own the freshly parsed tree and mutate it in place, so it is sanitized
+      # directly — no defensive deep_clone (which doubled the per-element cost on
+      # large documents for no benefit).
+      root = doc.root
       raise InvalidImageError, "SVG root required" unless allowed_element?(root)
 
       root = sanitize_element!(root, namespace)
-      reject_use_expansion_bomb!(root)
+      reject_render_expansion!(root)
       if namespace
         neutralize_root_overflow!(root)
         apply_scope_class!(root, namespace) if contains_style?(root)
@@ -197,17 +203,30 @@ module SafeImage
       element.add_text(sanitized)
     end
 
-    # Bounds the render tree a <use> graph instantiates. The structural caps in
-    # SvgMetadata bound the *source* document, but <use href="#id"> is expanded
-    # at render time: each <use> instantiates a deep copy of its target, so a
-    # chain of doubling groups fans a few dozen source nodes out into billions
-    # of rendered nodes (the SVG "use bomb"), and a cyclic reference expands
-    # forever. Walk the reference graph once — memoised so the walk itself
-    # cannot blow up, with an active-path set so a cycle is caught rather than
-    # recursed into — and reject when the instantiated node count would exceed
-    # the cap. Runs on the sanitized tree, so ids and href targets are already
-    # namespaced consistently and only same-document fragments remain.
-    def reject_use_expansion_bomb!(root)
+    # Bounds the render tree the document instantiates. The structural caps in
+    # SvgMetadata bound the *source* document, but several features replicate
+    # referenced content at render time, so the sanitized output is walked once
+    # and the instantiated render cost is accumulated against a single budget:
+    #
+    #   * a <use href="#id"> charges a deep copy of its target subtree — a chain
+    #     of doubling groups fans a few dozen source nodes into billions (the
+    #     "use bomb"), and a cyclic reference expands forever.
+    #   * a path/line/polyline/polygon that references a <marker> charges
+    #     (vertex count) x (referenced marker subtree cost): a marker is drawn
+    #     once per vertex, so a dense `d` (~200k vertices in 1 MB) times a
+    #     non-trivial marker is a linear-but-huge "draw bomb" the node/byte/
+    #     element caps cannot see.
+    #
+    # The walk is memoised on subtree cost so it cannot itself blow up, with an
+    # active-path set so a reference cycle is caught rather than recursed into.
+    # It runs on the sanitized tree, so ids and references are already namespaced
+    # consistently and only same-document #fragment references remain. Marker
+    # references are resolved against the same id map as <use>, so a marker that
+    # contains <use> (or another marked path) composes naturally.
+    REPLICATING_ELEMENTS = %w[path line polyline polygon].freeze
+    MARKER_ATTRIBUTES = %w[marker marker-start marker-mid marker-end].freeze
+
+    def reject_render_expansion!(root)
       id_map = {}
       collect_ids(root, id_map)
       subtree_render_cost(root, id_map, {}, {})
@@ -225,7 +244,7 @@ module SafeImage
       key = element.object_id
       cached = memo[key]
       return cached if cached
-      raise InvalidImageError, "SVG <use> reference cycle" if active[key]
+      raise InvalidImageError, "SVG reference cycle" if active[key]
 
       active[key] = true
       cost = 1
@@ -233,22 +252,69 @@ module SafeImage
         next unless child.is_a?(REXML::Element)
 
         cost += subtree_render_cost(child, id_map, memo, active)
-        check_use_expansion!(cost)
+        check_render_expansion!(cost)
       end
 
       if use_element?(element) && (target = use_target(element, id_map))
         cost += subtree_render_cost(target, id_map, memo, active)
-        check_use_expansion!(cost)
+        check_render_expansion!(cost)
       end
+
+      cost += marker_render_cost(element, id_map, memo, active)
+      check_render_expansion!(cost)
 
       active.delete(key)
       memo[key] = cost
     end
 
-    def check_use_expansion!(cost)
-      return if cost <= SvgMetadata::MAX_SVG_USE_EXPANSION
+    # A marked path instantiates each referenced marker once per vertex. Charge
+    # (vertex count) x (sum of distinct referenced marker subtree costs). The
+    # marker subtree cost goes through subtree_render_cost too, so the active-path
+    # set still catches a marker that references itself, and a marker containing a
+    # <use> bomb is counted. Vertices are over-counted (see path_vertex_count),
+    # which only makes the bound more conservative.
+    def marker_render_cost(element, id_map, memo, active)
+      return 0 unless REPLICATING_ELEMENTS.include?(element.name.to_s)
 
-      raise LimitError, "SVG <use> expansion exceeds #{SvgMetadata::MAX_SVG_USE_EXPANSION} rendered nodes"
+      markers = referenced_markers(element, id_map)
+      return 0 if markers.empty?
+
+      vertices = path_vertex_count(element)
+      return 0 if vertices.zero?
+
+      per_vertex = markers.sum { |marker| subtree_render_cost(marker, id_map, memo, active) }
+      vertices * per_vertex
+    end
+
+    # Collects the distinct marker subtrees a geometry element references, via
+    # the marker-* presentation attributes or their style="" twins. Only the
+    # canonical url(#fragment) form survives sanitisation, so one regex over the
+    # marker attributes and the style attribute finds every reference.
+    def referenced_markers(element, id_map)
+      sources = MARKER_ATTRIBUTES.map { |name| element.attributes[name].to_s }
+      sources << element.attributes["style"].to_s
+      targets = []
+      sources.each do |value|
+        value.scan(URL_FRAGMENT_REF) { targets << id_map[Regexp.last_match(2)] }
+      end
+      targets.compact.uniq
+    end
+
+    # A deliberate upper bound on the vertices a geometry element renders, never
+    # an exact parse: every run of digits in `d`/`points` is counted as a
+    # coordinate, so the result is >= the real vertex count. Over-counting only
+    # tightens the bound; under-counting would be the bug, so we never try to be
+    # precise about path command grammar.
+    def path_vertex_count(element)
+      geometry = "#{element.attributes["d"]} #{element.attributes["points"]}"
+      count = geometry.scan(/\d+(?:\.\d+)?/).length
+      count.zero? ? 0 : count + 1
+    end
+
+    def check_render_expansion!(cost)
+      return if cost <= SvgMetadata::MAX_SVG_RENDER_UNITS
+
+      raise LimitError, "SVG render expansion exceeds #{SvgMetadata::MAX_SVG_RENDER_UNITS} rendered nodes"
     end
 
     def use_element?(element)

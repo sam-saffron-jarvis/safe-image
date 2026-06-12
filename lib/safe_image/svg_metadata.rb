@@ -12,12 +12,20 @@ module SafeImage
     MAX_SVG_ATTRIBUTES = 50_000
     MAX_SVG_DIMENSION = 100_000
     MAX_SVG_PIXELS = 100_000_000
-    # Upper bound on the render tree after <use> references are instantiated.
-    # The caps above bound the *source* document, but <use href="#id"> is
-    # expanded at render time, so a few dozen source elements can fan out into
-    # billions of instantiated nodes ("use bomb"). This bounds the expanded
-    # node count the sanitized output can cost any consumer (browser/rasterizer).
-    MAX_SVG_USE_EXPANSION = 1_000_000
+    # Upper bound on the render tree the document instantiates. The caps above
+    # bound the *source* document, but several allowlisted features replicate
+    # referenced content at render time, so a small source can cost a consumer
+    # (browser/rasterizer) orders of magnitude more work:
+    #   * <use href="#id"> deep-copies its target subtree — a chain of doubling
+    #     groups fans a few dozen nodes into billions ("use bomb"), and a cyclic
+    #     reference expands forever.
+    #   * a <marker> is drawn once per vertex of every path/line/polyline/polygon
+    #     that references it, so (vertex count) x (marker subtree size) draws — a
+    #     dense `d` (~200k vertices fit in 1 MB) times a non-trivial marker is a
+    #     linear-but-huge "draw bomb" no node/byte/element cap can see.
+    # SvgSanitizer charges both against this single budget over the sanitized
+    # tree (renderer-free static accounting) and rejects when it is exceeded.
+    MAX_SVG_RENDER_UNITS = 1_000_000
 
     LENGTH_PATTERN = /\A\s*([+]?(?:\d+(?:\.\d+)?|\.\d+))(?:px)?\s*\z/i.freeze
     VIEWBOX_SPLIT = /[\s,]+/.freeze
@@ -69,6 +77,14 @@ module SafeImage
     def dimensions(path, max_pixels: nil, max_bytes: MAX_SVG_BYTES)
       xml = read_svg(path, max_bytes: max_bytes)
       _name, attributes = scan_svg!(xml)
+      dimensions_from_attributes(attributes, max_pixels: max_pixels)
+    end
+
+    # Computes and validates the document dimensions from the already-scanned
+    # root attributes, so a caller that has run scan_svg! does not re-read or
+    # re-scan the file. Same width/height-then-viewBox fallback and limits as
+    # dimensions above.
+    def dimensions_from_attributes(attributes, max_pixels: nil)
       width = parse_length(attributes["width"])
       height = parse_length(attributes["height"])
 
@@ -86,13 +102,21 @@ module SafeImage
     # streaming path above. The streaming validation runs first so a document
     # that breaches the structural caps is rejected before the tree is built.
     def parse(path, max_bytes: MAX_SVG_BYTES)
+      parse_with_attributes(path, max_bytes: max_bytes).first
+    end
+
+    # Like parse, but returns [doc, root_attributes] from a single read+scan so
+    # the sanitizer can validate dimensions off the same scan instead of reading
+    # and scanning the file a second time. The streaming cap validation still
+    # runs first, before the DOM is built.
+    def parse_with_attributes(path, max_bytes: MAX_SVG_BYTES)
       require_rexml
       xml = read_svg(path, max_bytes: max_bytes)
-      scan_svg!(xml)
+      _name, attributes = scan_svg!(xml)
       doc = REXML::Document.new(xml)
       raise InvalidImageError, "SVG root required" unless doc.root&.name == "svg"
 
-      doc
+      [doc, attributes]
     # ArgumentError: REXML resolves the declared encoding with Encoding.find,
     # which raises it bare on names it doesn't know; untrusted input must stay
     # inside our error hierarchy.
