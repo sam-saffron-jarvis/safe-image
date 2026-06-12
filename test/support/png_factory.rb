@@ -19,7 +19,9 @@ module PngFactory
     deflate = Zlib::Deflate.new
     row = "\x00".b * (width + 1)
     idat = +"".b
-    height.times { idat << deflate.deflate(row) }
+    # SYNC_FLUSH forces output on every call; zlib-ng raises Zlib::BufError
+    # when a Z_NO_FLUSH deflate consumes input without producing output.
+    height.times { idat << deflate.deflate(row, Zlib::SYNC_FLUSH) }
     idat << deflate.finish
     File.binwrite(path, "\x89PNG\r\n\x1a\n".b + chunk("IHDR", ihdr) + chunk("IDAT", idat) + chunk("IEND", ""))
   end
